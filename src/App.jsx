@@ -718,17 +718,26 @@ function AddToCollectionPrompt({ cardName, onYes, onNo }) {
 function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   const [search, setSearch] = useState("");
   const [filterColor, setFilterColor] = useState("all");
-  const [filterTypes, setFilterTypes] = useState(new Set()); // supertype multi-select
+  const [filterSupertypes, setFilterSupertypes] = useState(new Set()); // supertype multi-select
+  const [filterTypes, setFilterTypes] = useState(new Set()); // type multi-select
   const [filterSubtype, setFilterSubtype] = useState("");    // subtype autocomplete
   const [filterMV, setFilterMV] = useState("");
   const [sortBy, setSortBy] = useState("name");
   const [viewMode, setViewMode] = useState("all"); // "all" | "unique"
+  const [superMenuOpen, setSuperMenuOpen] = useState(false);
   const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const superMenuRef = useRef(null);
   const typeMenuRef = useRef(null);
 
-  // Individual type keywords (each word left of "—", including supertypes)
+  // Derive unique keywords (words left of "—") split into supertypes and main types
+  const superPartWords = collection.flatMap(c => (c.type_line || "").split("—")[0].trim().split(/\s+/).filter(Boolean));
+
+  const allSupertypes = [...new Set(
+    superPartWords.filter(w => SUPERTYPES.has(w))
+  )].sort();
+
   const allTypeKeywords = [...new Set(
-    collection.flatMap(c => (c.type_line || "").split("—")[0].trim().split(/\s+/).filter(Boolean))
+    superPartWords.filter(w => !SUPERTYPES.has(w))
   )].sort();
 
   // Exact type permutations (full combo, e.g. "Artifact Creature") — only multi-word ones
@@ -743,9 +752,12 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
     })
   )].sort();
 
-  // Close type menu on outside click
+  // Close menus on outside click
   useEffect(() => {
-    const handler = e => { if (typeMenuRef.current && !typeMenuRef.current.contains(e.target)) setTypeMenuOpen(false); };
+    const handler = e => {
+      if (typeMenuRef.current && !typeMenuRef.current.contains(e.target)) setTypeMenuOpen(false);
+      if (superMenuRef.current && !superMenuRef.current.contains(e.target)) setSuperMenuOpen(false);
+    };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
@@ -753,10 +765,13 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   let cards = [...collection];
   if (search) { const q = search.toLowerCase(); cards = cards.filter(c => c.name.toLowerCase().includes(q) || (c.oracle_text || "").toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q)); }
   if (filterColor !== "all") cards = cards.filter(c => c.colors?.includes(filterColor));
+  if (filterSupertypes.size > 0) cards = cards.filter(c => {
+    const words = (c.type_line || "").split("—")[0].split(/\s+/);
+    return [...filterSupertypes].some(s => words.includes(s));
+  });
   if (filterTypes.size > 0) cards = cards.filter(c => {
     const perm = getTypePermutation(c.type_line);
     return [...filterTypes].some(selected => {
-      // If selected value contains a space, match exact permutation; otherwise match keyword
       if (selected.includes(" ")) return perm === selected;
       return perm.split(/\s+/).includes(selected);
     });
@@ -804,6 +819,53 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
           <option value="W">White</option><option value="U">Blue</option>
           <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
         </select>
+
+        {/* Supertype multi-select dropdown */}
+        <div ref={superMenuRef} style={{ position: "relative" }}>
+          <button onClick={() => setSuperMenuOpen(o => !o)} style={{
+            ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+            borderColor: filterSupertypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
+            color: filterSupertypes.size > 0 ? "#c8a84b" : "#888",
+          }}>
+            {filterSupertypes.size === 0 ? "Supertype" : [...filterSupertypes].join(", ")}
+            {filterSupertypes.size > 0 && (
+              <span onClick={e => { e.stopPropagation(); setFilterSupertypes(new Set()); }}
+                style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
+            )}
+            <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{superMenuOpen ? "▲" : "▼"}</span>
+          </button>
+          {superMenuOpen && (
+            <div style={{
+              position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
+              background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
+              borderRadius: 8, padding: 6, minWidth: 160, maxHeight: 280, overflowY: "auto",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+            }}>
+              {allSupertypes.map(t => {
+                const active = filterSupertypes.has(t);
+                return (
+                  <div key={t} onClick={() => setFilterSupertypes(prev => {
+                    const next = new Set(prev);
+                    active ? next.delete(t) : next.add(t);
+                    return next;
+                  })} style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                    borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                    background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                  }}>
+                    <div style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                      background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                    <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
         {/* Type multi-select dropdown */}
         <div ref={typeMenuRef} style={{ position: "relative" }}>
           <button onClick={() => setTypeMenuOpen(o => !o)} style={{
