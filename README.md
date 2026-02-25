@@ -2,7 +2,7 @@
 
 A personal Magic: The Gathering collection tracker that stores your cards and decks in your own Google Sheet. Built with React + Vite, powered by the [Scryfall API](https://scryfall.com/docs/api) for live card data, prices, and images.
 
-**[Live Demo](https://mtg-tracker-seven.vercel.app/)**
+**[Live Demo](https://mtg-tracker-sam.vercel.app/)**
 
 ---
 
