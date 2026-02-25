@@ -147,6 +147,27 @@ function ckLink(card) {
   return `https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=${encodeURIComponent(name)}`;
 }
 
+// Known MTG supertypes — stripped when computing the "type permutation"
+const SUPERTYPES = new Set(["Legendary", "Basic", "Snow", "World", "Token", "Elite", "Ongoing"]);
+
+// Returns the main-type permutation for a card, e.g. "Artifact Creature", "Instant", "Land"
+// Strips supertypes and everything after the "—" (subtypes).
+function getTypePermutation(typeLine) {
+  const superPart = (typeLine || "").split("—")[0];
+  const words = superPart.trim().split(/\s+/).filter(Boolean);
+  const mainTypes = words.filter(w => !SUPERTYPES.has(w));
+  return mainTypes.join(" ") || "Other";
+}
+
+// Preferred display order for deck grouping sections
+const TYPE_GROUP_ORDER = [
+  "Creature", "Artifact Creature", "Enchantment Creature", "Artifact Enchantment Creature",
+  "Planeswalker", "Battle",
+  "Instant", "Sorcery",
+  "Artifact", "Enchantment", "Artifact Enchantment",
+  "Land", "Other",
+];
+
 // ─── Serialisation: card ↔ sheet row ─────────────────────────────────────────
 // Collection sheet columns: id | name | set_name | set | collector_number | qty | prices_json | card_json
 function cardToRow(card) {
@@ -705,9 +726,14 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   const [typeMenuOpen, setTypeMenuOpen] = useState(false);
   const typeMenuRef = useRef(null);
 
-  // Derive unique supertypes (words left of "—") and subtypes (words right of "—") from collection
-  const allSupertypes = [...new Set(
+  // Individual type keywords (each word left of "—", including supertypes)
+  const allTypeKeywords = [...new Set(
     collection.flatMap(c => (c.type_line || "").split("—")[0].trim().split(/\s+/).filter(Boolean))
+  )].sort();
+
+  // Exact type permutations (full combo, e.g. "Artifact Creature") — only multi-word ones
+  const allTypePermutations = [...new Set(
+    collection.map(c => getTypePermutation(c.type_line)).filter(p => p && p.includes(" "))
   )].sort();
 
   const allSubtypes = [...new Set(
@@ -728,8 +754,12 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   if (search) { const q = search.toLowerCase(); cards = cards.filter(c => c.name.toLowerCase().includes(q) || (c.oracle_text || "").toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q)); }
   if (filterColor !== "all") cards = cards.filter(c => c.colors?.includes(filterColor));
   if (filterTypes.size > 0) cards = cards.filter(c => {
-    const superpart = (c.type_line || "").split("—")[0].toLowerCase();
-    return [...filterTypes].some(t => superpart.includes(t.toLowerCase()));
+    const perm = getTypePermutation(c.type_line);
+    return [...filterTypes].some(selected => {
+      // If selected value contains a space, match exact permutation; otherwise match keyword
+      if (selected.includes(" ")) return perm === selected;
+      return perm.split(/\s+/).includes(selected);
+    });
   });
   if (filterSubtype) { const q = filterSubtype.toLowerCase(); cards = cards.filter(c => ((c.type_line || "").split("—")[1] || "").toLowerCase().includes(q)); }
   if (filterMV !== "") cards = cards.filter(c => c.cmc === parseInt(filterMV));
@@ -792,10 +822,11 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
             <div style={{
               position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
               background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
-              borderRadius: 8, padding: 6, minWidth: 180, maxHeight: 280, overflowY: "auto",
+              borderRadius: 8, padding: "8px 6px", minWidth: 200, maxHeight: 350, overflowY: "auto",
               boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
             }}>
-              {allSupertypes.map(t => {
+              <div style={{ fontSize: 10, color: "#666", padding: "4px 8px", letterSpacing: 1 }}>KEYWORDS</div>
+              {allTypeKeywords.map(t => {
                 const active = filterTypes.has(t);
                 return (
                   <div key={t} onClick={() => setFilterTypes(prev => {
@@ -817,6 +848,33 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
                   </div>
                 );
               })}
+              {allTypePermutations.length > 0 && (
+                <>
+                  <div style={{ fontSize: 10, color: "#666", padding: "12px 8px 4px", letterSpacing: 1, borderTop: "1px solid rgba(255,255,255,0.05)", marginTop: 4 }}>PERMUTATIONS</div>
+                  {allTypePermutations.map(t => {
+                    const active = filterTypes.has(t);
+                    return (
+                      <div key={t} onClick={() => setFilterTypes(prev => {
+                        const next = new Set(prev);
+                        active ? next.delete(t) : next.add(t);
+                        return next;
+                      })} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                        borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                        background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                      }}>
+                        <div style={{
+                          width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                          border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                          background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                        <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1107,7 +1165,28 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
   const totalCards = deck.cards.reduce((s, c) => s + c.qty, 0);
   const totalValue = deckCards.reduce((s, c) => s + getPrice(c) * (c.deckQty || 0), 0);
   const typeCounts = {};
-  deckCards.forEach(c => { const t = (c.type_line || "").split("—")[0].trim().split(" ").pop(); typeCounts[t] = (typeCounts[t] || 0) + (c.deckQty || 0); });
+  deckCards.forEach(c => {
+    const t = getTypePermutation(c.type_line);
+    typeCounts[t] = (typeCounts[t] || 0) + (c.deckQty || 0);
+  });
+
+  // Group cards by their main-type permutation (e.g. "Artifact Creature")
+  const groupedCards = {};
+  deckCards.forEach(c => {
+    const t = getTypePermutation(c.type_line);
+    if (!groupedCards[t]) groupedCards[t] = [];
+    groupedCards[t].push(c);
+  });
+
+  // Sort groups by the predefined display order
+  const sortedTypes = Object.keys(groupedCards).sort((a, b) => {
+    const ia = TYPE_GROUP_ORDER.indexOf(a);
+    const ib = TYPE_GROUP_ORDER.indexOf(b);
+    if (ia === -1 && ib === -1) return a.localeCompare(b);
+    if (ia === -1) return 1;
+    if (ib === -1) return -1;
+    return ia - ib;
+  });
   const available = collection.filter(c => { const q = search.toLowerCase(); return !q || c.name.toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q); });
 
   // Commander: cards in deck that are Legendary Creatures
@@ -1186,31 +1265,40 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
             <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
             {deckCards.length === 0
               ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
-              : <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {deckCards.map(card => {
-                  const isCommander = deck.format === "Commander" && card.id === deck.commander;
-                  return (
-                    <div key={card.id}
-                      onMouseEnter={e => handleMouseEnter(card, e)}
-                      onMouseMove={e => handleMouseMove(card, e)}
-                      onMouseLeave={handleMouseLeave}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
-                        background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
-                        borderRadius: 6,
-                        borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
-                        cursor: "default"
-                      }}>
-                      {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
-                      <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
-                      <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
-                      <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
-                      <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
-                      <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
-                      <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+              : <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {sortedTypes.map(type => (
+                  <div key={type}>
+                    <div style={{ fontSize: 10, fontWeight: "bold", letterSpacing: 1, color: "#666", marginBottom: 4, paddingLeft: 4 }}>
+                      {type.toUpperCase()} ({groupedCards[type].reduce((s, c) => s + c.deckQty, 0)})
                     </div>
-                  );
-                })}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      {groupedCards[type].map(card => {
+                        const isCommander = deck.format === "Commander" && card.id === deck.commander;
+                        return (
+                          <div key={card.id}
+                            onMouseEnter={e => handleMouseEnter(card, e)}
+                            onMouseMove={e => handleMouseMove(card, e)}
+                            onMouseLeave={handleMouseLeave}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
+                              background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
+                              borderRadius: 6,
+                              borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
+                              cursor: "default"
+                            }}>
+                            {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
+                            <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
+                            <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
+                            <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
+                            <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
+                            <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
+                            <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             }
           </div>
