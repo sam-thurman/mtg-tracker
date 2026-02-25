@@ -52,34 +52,56 @@ async function sheetsClear(range, token) {
   }
 }
 
-// ─── OAuth2 (Google Sign-In via GIS) ─────────────────────────────────────────
-let tokenClient = null;
-let currentToken = null;
-const pendingTokenCallbacks = [];
+// --- OAuth2 — redirect flow (works on desktop + mobile) ---
+const OAUTH_TOKEN_KEY = "mtg_oauth_token";
+const OAUTH_EXPIRY_KEY = "mtg_oauth_expiry";
+const PENDING_SAVE_KEY = "mtg_pending_save";
 
-function initGoogleAuth() {
-  if (!window.google) return;
-  tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: SHEETS_CONFIG.clientId,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
-    callback: (resp) => {
-      if (resp.error) { console.error("Auth error:", resp); return; }
-      currentToken = resp.access_token;
-      // Fire all callbacks that were waiting for a token
-      while (pendingTokenCallbacks.length) {
-        pendingTokenCallbacks.shift()(currentToken);
-      }
-    }
-  });
+function getStoredToken() {
+  const token = sessionStorage.getItem(OAUTH_TOKEN_KEY);
+  const expiry = sessionStorage.getItem(OAUTH_EXPIRY_KEY);
+  if (!token || !expiry) return null;
+  if (Date.now() > parseInt(expiry)) {
+    sessionStorage.removeItem(OAUTH_TOKEN_KEY);
+    sessionStorage.removeItem(OAUTH_EXPIRY_KEY);
+    return null;
+  }
+  return token;
 }
 
-function requestToken(callback) {
-  if (currentToken) { callback(currentToken); return; }
-  // Queue the callback, then prompt sign-in once
-  pendingTokenCallbacks.push(callback);
-  if (pendingTokenCallbacks.length === 1 && tokenClient) {
-    tokenClient.requestAccessToken();
-  }
+function storeToken(token, expiresIn = 3600) {
+  sessionStorage.setItem(OAUTH_TOKEN_KEY, token);
+  sessionStorage.setItem(OAUTH_EXPIRY_KEY, String(Date.now() + expiresIn * 1000));
+}
+
+function redirectToGoogleAuth() {
+  sessionStorage.setItem(PENDING_SAVE_KEY, "1");
+  const params = new URLSearchParams({
+    client_id: SHEETS_CONFIG.clientId,
+    redirect_uri: window.location.origin + window.location.pathname,
+    response_type: "token",
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    include_granted_scopes: "true",
+  });
+  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+}
+
+function parseTokenFromHash() {
+  const hash = window.location.hash.substring(1);
+  if (!hash) return null;
+  const params = new URLSearchParams(hash);
+  const token = params.get("access_token");
+  const expiresIn = params.get("expires_in");
+  if (!token) return null;
+  storeToken(token, parseInt(expiresIn) || 3600);
+  window.history.replaceState(null, "", window.location.pathname);
+  return token;
+}
+
+function requestToken(onTokenReady) {
+  const existing = getStoredToken();
+  if (existing) { onTokenReady(existing); return; }
+  redirectToGoogleAuth();
 }
 
 // ─── Scryfall API helpers ─────────────────────────────────────────────────────
@@ -181,20 +203,18 @@ export default function App() {
   const saveTimeout = useRef(null);
 
   const isConfigured = SHEETS_CONFIG.spreadsheetId !== "YOUR_SPREADSHEET_ID_HERE"
-    && SHEETS_CONFIG.apiKey !== "YOUR_API_KEY_HERE";
+    && SHEETS_CONFIG.apiKey !== "YOUR_API_KEY_HERE"
+    && SHEETS_CONFIG.clientId !== "YOUR_CLIENT_ID_HERE";
 
-  // Load GIS script
+  // On mount: parse token from URL hash (return from OAuth redirect), then load data
   useEffect(() => {
     if (!isConfigured) { setSyncStatus("unconfigured"); return; }
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.onload = () => { initGoogleAuth(); };
-    document.head.appendChild(script);
-  }, []);
-
-  // Load data from Sheets on mount
-  useEffect(() => {
-    if (!isConfigured) return;
+    const tokenFromRedirect = parseTokenFromHash();
+    const pendingSave = sessionStorage.getItem(PENDING_SAVE_KEY);
+    if (tokenFromRedirect && pendingSave) {
+      sessionStorage.removeItem(PENDING_SAVE_KEY);
+      // Load first, then the pending save will fire via triggerSave after state updates
+    }
     loadFromSheets();
   }, []);
 
