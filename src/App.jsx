@@ -326,7 +326,7 @@ export default function App() {
   const totalValue = collection.reduce((sum, c) => sum + getPrice(c) * (c.qty || 1), 0);
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0d0d0f", fontFamily: "'Palatino Linotype', Palatino, 'Book Antiqua', serif", color: "#e8e0d0" }}>
+    <div style={{ minHeight: "100vh", background: "#0d0d0f", fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: "#e8e0d0" }}>
       {/* Header */}
       <header className="app-header" style={{
         background: "linear-gradient(135deg, #1a0a00 0%, #0d0d0f 50%, #001a0d 100%)",
@@ -697,15 +697,41 @@ function AddToCollectionPrompt({ cardName, onYes, onNo }) {
 function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   const [search, setSearch] = useState("");
   const [filterColor, setFilterColor] = useState("all");
-  const [filterType, setFilterType] = useState("");
+  const [filterTypes, setFilterTypes] = useState(new Set()); // supertype multi-select
+  const [filterSubtype, setFilterSubtype] = useState("");    // subtype autocomplete
   const [filterMV, setFilterMV] = useState("");
   const [sortBy, setSortBy] = useState("name");
   const [viewMode, setViewMode] = useState("all"); // "all" | "unique"
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const typeMenuRef = useRef(null);
+
+  // Derive unique supertypes (words left of "—") and subtypes (words right of "—") from collection
+  const allSupertypes = [...new Set(
+    collection.flatMap(c => (c.type_line || "").split("—")[0].trim().split(/\s+/).filter(Boolean))
+  )].sort();
+
+  const allSubtypes = [...new Set(
+    collection.flatMap(c => {
+      const after = (c.type_line || "").split("—")[1];
+      return after ? after.trim().split(/\s+/).filter(Boolean) : [];
+    })
+  )].sort();
+
+  // Close type menu on outside click
+  useEffect(() => {
+    const handler = e => { if (typeMenuRef.current && !typeMenuRef.current.contains(e.target)) setTypeMenuOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   let cards = [...collection];
   if (search) { const q = search.toLowerCase(); cards = cards.filter(c => c.name.toLowerCase().includes(q) || (c.oracle_text || "").toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q)); }
   if (filterColor !== "all") cards = cards.filter(c => c.colors?.includes(filterColor));
-  if (filterType) cards = cards.filter(c => (c.type_line || "").toLowerCase().includes(filterType.toLowerCase()));
+  if (filterTypes.size > 0) cards = cards.filter(c => {
+    const superpart = (c.type_line || "").split("—")[0].toLowerCase();
+    return [...filterTypes].some(t => superpart.includes(t.toLowerCase()));
+  });
+  if (filterSubtype) { const q = filterSubtype.toLowerCase(); cards = cards.filter(c => ((c.type_line || "").split("—")[1] || "").toLowerCase().includes(q)); }
   if (filterMV !== "") cards = cards.filter(c => c.cmc === parseInt(filterMV));
   if (sortBy === "name") cards.sort((a, b) => a.name.localeCompare(b.name));
   if (sortBy === "price") cards.sort((a, b) => getPrice(b) - getPrice(a));
@@ -748,7 +774,68 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
           <option value="W">White</option><option value="U">Blue</option>
           <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
         </select>
-        <input value={filterType} onChange={e => setFilterType(e.target.value)} placeholder="Type (Creature, Land...)" style={{ ...filterInputStyle, minWidth: 180 }} />
+        {/* Type multi-select dropdown */}
+        <div ref={typeMenuRef} style={{ position: "relative" }}>
+          <button onClick={() => setTypeMenuOpen(o => !o)} style={{
+            ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+            borderColor: filterTypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
+            color: filterTypes.size > 0 ? "#c8a84b" : "#888",
+          }}>
+            {filterTypes.size === 0 ? "Type" : [...filterTypes].join(", ")}
+            {filterTypes.size > 0 && (
+              <span onClick={e => { e.stopPropagation(); setFilterTypes(new Set()); }}
+                style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
+            )}
+            <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{typeMenuOpen ? "▲" : "▼"}</span>
+          </button>
+          {typeMenuOpen && (
+            <div style={{
+              position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
+              background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
+              borderRadius: 8, padding: 6, minWidth: 180, maxHeight: 280, overflowY: "auto",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+            }}>
+              {allSupertypes.map(t => {
+                const active = filterTypes.has(t);
+                return (
+                  <div key={t} onClick={() => setFilterTypes(prev => {
+                    const next = new Set(prev);
+                    active ? next.delete(t) : next.add(t);
+                    return next;
+                  })} style={{
+                    display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                    borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                    background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                  }}>
+                    <div style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                      background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                    <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        {/* Subtype autocomplete */}
+        <div style={{ position: "relative" }}>
+          <input
+            id="subtype-search"
+            value={filterSubtype}
+            onChange={e => setFilterSubtype(e.target.value)}
+            placeholder="Subtype..."
+            list="subtype-list"
+            style={{ ...filterInputStyle, minWidth: 140 }}
+          />
+          <datalist id="subtype-list">
+            {allSubtypes
+              .filter(s => !filterSubtype || s.toLowerCase().startsWith(filterSubtype.toLowerCase()))
+              .map(s => <option key={s} value={s} />)}
+          </datalist>
+        </div>
         <input value={filterMV} onChange={e => setFilterMV(e.target.value)} placeholder="Mana Value" type="number" min="0" style={{ ...filterInputStyle, width: 100 }} />
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={filterInputStyle}>
           <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
