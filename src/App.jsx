@@ -306,10 +306,9 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: "#0d0d0f", fontFamily: "'Palatino Linotype', Palatino, 'Book Antiqua', serif", color: "#e8e0d0" }}>
       {/* Header */}
-      <header style={{
+      <header className="app-header" style={{
         background: "linear-gradient(135deg, #1a0a00 0%, #0d0d0f 50%, #001a0d 100%)",
-        borderBottom: "1px solid rgba(180,140,60,0.3)", padding: "16px 24px",
-        display: "flex", alignItems: "center", justifyContent: "space-between"
+        borderBottom: "1px solid rgba(180,140,60,0.3)"
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 28 }}>⚔️</span>
@@ -319,7 +318,7 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <div className="app-header-right">
           {/* Sync status */}
           <div style={{ fontSize: 12, color: syncStatus === "error" ? "#e57373" : syncStatus === "saving" ? "#ffb74d" : syncStatus === "unconfigured" ? "#888" : "#81c784", display: "flex", alignItems: "center", gap: 6 }}>
             <span>{syncStatus === "loading" ? "⟳" : syncStatus === "saving" ? "↑" : syncStatus === "error" ? "⚠" : syncStatus === "unconfigured" ? "⚙" : "✓"}</span>
@@ -357,7 +356,7 @@ export default function App() {
         ))}
       </nav>
 
-      <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
+      <main className="app-main">
         {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} />}
         {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} />}
         {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} />}
@@ -447,9 +446,9 @@ function SearchTab({ onAdd, collection }) {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div className="search-bar-row">
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()}
-          placeholder="Search card name..." style={{ flex: 1, padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "#e8e0d0", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
+          placeholder="Search card name..." style={{ padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "#e8e0d0", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
         <button onClick={search} style={btnStyle("#c8a84b", "#1a1200")}>Search</button>
         <button onClick={cameraMode ? stopCamera : startCamera} style={btnStyle("#4a8a6a", "#001a0d")}>{cameraMode ? "✕ Cancel" : "📷 Scan"}</button>
       </div>
@@ -498,8 +497,8 @@ function CardDetail({ card, onAdd, inCollection, onBack }) {
       <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <button onClick={onBack} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>← Back to results</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr" }}>
-        <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+      <div className="card-detail-grid">
+        <div className="card-detail-img-col" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
           {img ? (
             <div>
               <img src={img} alt={card.name} style={{ width: 200, borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.6)", cursor: "pointer" }} onClick={() => setShowFull(true)} />
@@ -509,7 +508,7 @@ function CardDetail({ card, onAdd, inCollection, onBack }) {
           <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
           <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
         </div>
-        <div style={{ padding: "20px 20px 20px 0" }}>
+        <div className="card-detail-info-col" style={{ padding: "20px 20px 20px 0" }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
             <h2 style={{ margin: 0, fontSize: 22, color: "#e8e0d0", fontStyle: "italic" }}>{card.name}</h2>
             <div style={{ fontSize: 24, color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card)}</div>
@@ -602,7 +601,7 @@ function CollectionRow({ card, onRemove, onQty }) {
           <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
           <div style={{ fontSize: 12, color: "#666" }}>{card.type_line} · {card.set_name}</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="coll-row-meta" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {card.colors?.map(c => <ColorPip key={c} c={c} />)}
           <span style={{ fontSize: 12, color: "#888" }}>CMC {card.cmc || 0}</span>
         </div>
@@ -612,7 +611,7 @@ function CollectionRow({ card, onRemove, onQty }) {
           <span style={{ minWidth: 24, textAlign: "center", fontSize: 14 }}>{card.qty || 1}</span>
           <button onClick={e => { e.stopPropagation(); onQty(card.id, 1); }} style={qtyBtn}>+</button>
         </div>
-        <div style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card) * (card.qty || 1)).toFixed(2)}</div>
+        <div className="coll-row-subtotal" style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card) * (card.qty || 1)).toFixed(2)}</div>
         <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>
       </div>
       {expanded && (
@@ -649,7 +648,7 @@ function DecksTab({ decks, setDecks, collection }) {
   const currentDeck = decks.find(d => d.id === activeDeck);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20, alignItems: "start" }}>
+    <div className="decks-grid">
       <div>
         <div style={{ marginBottom: 12 }}>
           <input value={newDeckName} onChange={e => setNewDeckName(e.target.value)} onKeyDown={e => e.key === "Enter" && createDeck()} placeholder="New deck name..." style={{ ...filterInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }} />
@@ -711,7 +710,7 @@ function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
         <div style={{ fontSize: 13, color: "#888" }}>{totalCards} cards · ${totalValue.toFixed(2)}</div>
         <div style={{ fontSize: 12, color: "#666" }}>{Object.entries(typeCounts).map(([t, n]) => `${t}(${n})`).join(" · ")}</div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="deck-editor-grid">
         <div>
           <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
           {deckCards.length === 0

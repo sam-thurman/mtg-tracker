@@ -22,10 +22,9 @@ a:hover {
   color: #535bf2;
 }
 
+/* Fix: body was centering the app, making it narrow on wide screens */
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
 }
@@ -52,6 +51,104 @@ button:hover {
 button:focus,
 button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
+}
+
+/* ── Responsive layout helpers ─────────────────────────────────── */
+
+/* App header: side-by-side on desktop, stacked on mobile */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 20px;
+}
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Main content area */
+.app-main {
+  padding: 20px 16px;
+  max-width: 1100px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* Search bar row */
+.search-bar-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.search-bar-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Card detail: image + info side-by-side on desktop, stacked on mobile */
+.card-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+}
+@media (max-width: 600px) {
+  .card-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .card-detail-img-col {
+    display: flex;
+    flex-direction: row !important;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 14px 0 !important;
+  }
+  .card-detail-img-col img {
+    width: 110px !important;
+  }
+  .card-detail-info-col {
+    padding: 10px 14px 14px !important;
+  }
+}
+
+/* Decks sidebar + editor */
+.decks-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .decks-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Deck editor: two columns on desktop, stacked on mobile */
+.deck-editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 600px) {
+  .deck-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Collection row: hide less-important columns on very narrow screens */
+@media (max-width: 480px) {
+  .coll-row-meta {
+    display: none;
+  }
+  .coll-row-subtotal {
+    display: none;
+  }
 }
 
 @media (prefers-color-scheme: light) {
