@@ -1,0 +1,743 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ─── CONFIG — fill these in after following SETUP.md ─────────────────────────
+const SHEETS_CONFIG = {
+  spreadsheetId: import.meta.env.VITE_SPREADSHEET_ID,
+  apiKey: import.meta.env.VITE_API_KEY,
+  clientId: import.meta.env.VITE_CLIENT_ID,
+};
+
+// ─── Google Sheets API helpers ────────────────────────────────────────────────
+const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
+
+async function sheetsGet(range) {
+  const { spreadsheetId, apiKey } = SHEETS_CONFIG;
+  const url = `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}?key=${apiKey}`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(`Sheets read failed: ${r.status} — ${body?.error?.message || ""}`);
+  }
+  const d = await r.json();
+  return d.values || [];
+}
+
+async function sheetsUpdate(range, values, token) {
+  const { spreadsheetId } = SHEETS_CONFIG;
+  const url = `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`;
+  const r = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+    body: JSON.stringify({ range, majorDimension: "ROWS", values })
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(`Sheets write failed: ${r.status} — ${body?.error?.message || ""}`);
+  }
+}
+
+async function sheetsClear(range, token) {
+  const { spreadsheetId } = SHEETS_CONFIG;
+  const url = `${SHEETS_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}:clear`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(`Sheets clear failed: ${r.status} — ${body?.error?.message || ""}`);
+  }
+}
+
+// ─── OAuth2 (Google Sign-In via GIS) ─────────────────────────────────────────
+let tokenClient = null;
+let currentToken = null;
+const pendingTokenCallbacks = [];
+
+function initGoogleAuth() {
+  if (!window.google) return;
+  tokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: SHEETS_CONFIG.clientId,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    callback: (resp) => {
+      if (resp.error) { console.error("Auth error:", resp); return; }
+      currentToken = resp.access_token;
+      // Fire all callbacks that were waiting for a token
+      while (pendingTokenCallbacks.length) {
+        pendingTokenCallbacks.shift()(currentToken);
+      }
+    }
+  });
+}
+
+function requestToken(callback) {
+  if (currentToken) { callback(currentToken); return; }
+  // Queue the callback, then prompt sign-in once
+  pendingTokenCallbacks.push(callback);
+  if (pendingTokenCallbacks.length === 1 && tokenClient) {
+    tokenClient.requestAccessToken();
+  }
+}
+
+// ─── Scryfall API helpers ─────────────────────────────────────────────────────
+const SF = "https://api.scryfall.com";
+
+async function searchCards(name) {
+  const r = await fetch(`${SF}/cards/search?q=${encodeURIComponent(name)}&unique=prints&order=released`);
+  if (!r.ok) return [];
+  const d = await r.json();
+  return d.data || [];
+}
+
+function getPrice(card) {
+  const p = card.prices || {};
+  return parseFloat(p.usd || p.usd_foil || 0) || 0;
+}
+
+function getPriceLabel(card) {
+  const p = card.prices || {};
+  if (p.usd) return `$${parseFloat(p.usd).toFixed(2)}`;
+  if (p.usd_foil) return `$${parseFloat(p.usd_foil).toFixed(2)} (foil)`;
+  return "N/A";
+}
+
+function getImage(card) {
+  if (card.image_uris) return card.image_uris.normal || card.image_uris.small;
+  if (card.card_faces?.[0]?.image_uris) return card.card_faces[0].image_uris.normal;
+  return null;
+}
+
+function getOracleText(card) {
+  if (card.oracle_text) return card.oracle_text;
+  if (card.card_faces) return card.card_faces.map(f => `[${f.name}]\n${f.oracle_text || ""}`).join("\n\n");
+  return "";
+}
+
+function tcgLink(card) {
+  return card.purchase_uris?.tcgplayer || `https://www.tcgplayer.com/search/magic/product?q=${encodeURIComponent(card.name)}`;
+}
+
+function ckLink(card) {
+  return card.purchase_uris?.cardkingdom || `https://www.cardkingdom.com/catalog/search?search=${encodeURIComponent(card.name)}`;
+}
+
+// ─── Serialisation: card ↔ sheet row ─────────────────────────────────────────
+// Collection sheet columns: id | name | set_name | set | collector_number | qty | prices_json | card_json
+function cardToRow(card) {
+  return [
+    card.id,
+    card.name,
+    card.set_name || "",
+    card.set || "",
+    card.collector_number || "",
+    String(card.qty || 1),
+    JSON.stringify(card.prices || {}),
+    JSON.stringify(card), // full card blob
+  ];
+}
+
+function rowToCard(row) {
+  try {
+    const full = JSON.parse(row[7] || "{}");
+    return { ...full, qty: parseInt(row[5]) || 1 };
+  } catch { return null; }
+}
+
+// Decks sheet columns: id | name | cards_json
+function deckToRow(deck) {
+  return [deck.id, deck.name, JSON.stringify(deck.cards)];
+}
+
+function rowToDeck(row) {
+  try {
+    return { id: row[0], name: row[1], cards: JSON.parse(row[2] || "[]") };
+  } catch { return null; }
+}
+
+// ─── Color helpers ────────────────────────────────────────────────────────────
+const COLOR_MAP = { W: "#fffde7", U: "#1565c0", B: "#212121", R: "#b71c1c", G: "#1b5e20" };
+const COLOR_LABEL = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
+
+function ColorPip({ c }) {
+  return (
+    <span style={{
+      display: "inline-block", width: 14, height: 14, borderRadius: "50%",
+      background: COLOR_MAP[c] || "#888", border: "1px solid rgba(255,255,255,0.3)",
+      marginRight: 2, verticalAlign: "middle"
+    }} title={COLOR_LABEL[c] || c} />
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab] = useState("search");
+  const [collection, setCollection] = useState([]);
+  const [decks, setDecks] = useState([]);
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | loading | saving | error | unconfigured
+  const [syncMsg, setSyncMsg] = useState("");
+  const saveTimeout = useRef(null);
+
+  const isConfigured = SHEETS_CONFIG.spreadsheetId !== "YOUR_SPREADSHEET_ID_HERE"
+    && SHEETS_CONFIG.apiKey !== "YOUR_API_KEY_HERE";
+
+  // Load GIS script
+  useEffect(() => {
+    if (!isConfigured) { setSyncStatus("unconfigured"); return; }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.onload = () => { initGoogleAuth(); };
+    document.head.appendChild(script);
+  }, []);
+
+  // Load data from Sheets on mount
+  useEffect(() => {
+    if (!isConfigured) return;
+    loadFromSheets();
+  }, []);
+
+  const loadFromSheets = async () => {
+    setSyncStatus("loading");
+    setSyncMsg("Loading from Google Sheets...");
+    try {
+      const [collRows, deckRows] = await Promise.all([
+        sheetsGet("Collection!A2:H1000"),
+        sheetsGet("Decks!A2:C1000"),
+      ]);
+      const cards = collRows.map(rowToCard).filter(Boolean);
+      const dks = deckRows.map(rowToDeck).filter(Boolean);
+      setCollection(cards);
+      setDecks(dks);
+      setSyncStatus("idle");
+      setSyncMsg(`Loaded ${cards.length} cards`);
+    } catch (e) {
+      setSyncStatus("error");
+      setSyncMsg(`Load failed: ${e.message}`);
+    }
+  };
+
+  const saveToSheets = useCallback(async (col, dks) => {
+    if (!isConfigured) return;
+    setSyncStatus("saving");
+    setSyncMsg("Saving...");
+    requestToken(async (token) => {
+      if (!token) {
+        setSyncStatus("error");
+        setSyncMsg("Sign in required to save");
+        return;
+      }
+      try {
+        // Write collection
+        await sheetsClear("Collection!A2:H1000", token);
+        if (col.length > 0) {
+          await sheetsUpdate("Collection!A2", col.map(cardToRow), token);
+        }
+        // Write decks
+        await sheetsClear("Decks!A2:C1000", token);
+        if (dks.length > 0) {
+          await sheetsUpdate("Decks!A2", dks.map(deckToRow), token);
+        }
+        setSyncStatus("idle");
+        setSyncMsg(`Saved ${new Date().toLocaleTimeString()}`);
+      } catch (e) {
+        setSyncStatus("error");
+        setSyncMsg(`Save failed: ${e.message}`);
+      }
+    });
+  }, [isConfigured]);
+
+  // Debounced auto-save whenever collection/decks change
+  const collectionRef = useRef(collection);
+  const decksRef = useRef(decks);
+  collectionRef.current = collection;
+  decksRef.current = decks;
+
+  const triggerSave = useCallback(() => {
+    if (!isConfigured) return;
+    clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(() => {
+      saveToSheets(collectionRef.current, decksRef.current);
+    }, 1500);
+  }, [saveToSheets, isConfigured]);
+
+  const addToCollection = useCallback((card) => {
+    setCollection(prev => {
+      const next = prev.find(c => c.id === card.id)
+        ? prev.map(c => c.id === card.id ? { ...c, qty: (c.qty || 1) + 1 } : c)
+        : [...prev, { ...card, qty: 1, addedAt: Date.now() }];
+      setTimeout(triggerSave, 0);
+      return next;
+    });
+  }, [triggerSave]);
+
+  const removeFromCollection = useCallback((cardId) => {
+    setCollection(prev => { const n = prev.filter(c => c.id !== cardId); setTimeout(triggerSave, 0); return n; });
+    setDecks(prev => { const n = prev.map(d => ({ ...d, cards: d.cards.filter(c => c.collectionId !== cardId) })); setTimeout(triggerSave, 0); return n; });
+  }, [triggerSave]);
+
+  const updateQty = useCallback((cardId, delta) => {
+    setCollection(prev => { const n = prev.map(c => c.id === cardId ? { ...c, qty: Math.max(1, (c.qty || 1) + delta) } : c); setTimeout(triggerSave, 0); return n; });
+  }, [triggerSave]);
+
+  const totalValue = collection.reduce((sum, c) => sum + getPrice(c) * (c.qty || 1), 0);
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0d0d0f", fontFamily: "'Palatino Linotype', Palatino, 'Book Antiqua', serif", color: "#e8e0d0" }}>
+      {/* Header */}
+      <header style={{
+        background: "linear-gradient(135deg, #1a0a00 0%, #0d0d0f 50%, #001a0d 100%)",
+        borderBottom: "1px solid rgba(180,140,60,0.3)", padding: "16px 24px",
+        display: "flex", alignItems: "center", justifyContent: "space-between"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 28 }}>⚔️</span>
+          <div>
+            <div style={{ fontSize: 22, fontWeight: "bold", letterSpacing: 2, color: "#c8a84b", textShadow: "0 0 20px rgba(200,168,75,0.5)" }}>ARCANE LEDGER</div>
+            <div style={{ fontSize: 11, color: "#888", letterSpacing: 3, textTransform: "uppercase" }}>MTG Collection Tracker</div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {/* Sync status */}
+          <div style={{ fontSize: 12, color: syncStatus === "error" ? "#e57373" : syncStatus === "saving" ? "#ffb74d" : syncStatus === "unconfigured" ? "#888" : "#81c784", display: "flex", alignItems: "center", gap: 6 }}>
+            <span>{syncStatus === "loading" ? "⟳" : syncStatus === "saving" ? "↑" : syncStatus === "error" ? "⚠" : syncStatus === "unconfigured" ? "⚙" : "✓"}</span>
+            <span>{syncMsg || (syncStatus === "unconfigured" ? "Configure Google Sheets in code" : "Ready")}</span>
+            {syncStatus === "idle" && isConfigured && (
+              <button onClick={loadFromSheets} style={{ marginLeft: 4, background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 12 }}>↻ Refresh</button>
+            )}
+          </div>
+
+          <div style={{ fontSize: 14, color: "#c8a84b", textAlign: "right", background: "rgba(200,168,75,0.1)", padding: "6px 14px", borderRadius: 6, border: "1px solid rgba(200,168,75,0.2)" }}>
+            <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>COLLECTION VALUE</div>
+            <div style={{ fontSize: 20, fontWeight: "bold" }}>${totalValue.toFixed(2)}</div>
+            <div style={{ fontSize: 11, color: "#888" }}>{collection.reduce((s, c) => s + (c.qty || 1), 0)} cards</div>
+          </div>
+        </div>
+      </header>
+
+      {/* Unconfigured banner */}
+      {!isConfigured && (
+        <div style={{ background: "rgba(200,100,0,0.15)", borderBottom: "1px solid rgba(200,100,0,0.3)", padding: "10px 24px", fontSize: 13, color: "#ffb74d" }}>
+          ⚙️ <strong>Google Sheets not configured.</strong> Open <code>src/App.jsx</code> and fill in <code>SHEETS_CONFIG</code> at the top of the file. See <strong>SETUP.md</strong> for instructions. Your data will not be saved until this is done.
+        </div>
+      )}
+
+      {/* Nav */}
+      <nav style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" }}>
+        {[{ id: "search", label: "🔍 Search & Add" }, { id: "collection", label: "📚 Collection" }, { id: "decks", label: "🃏 Decks" }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            flex: 1, padding: "14px 8px", border: "none", cursor: "pointer",
+            background: tab === t.id ? "rgba(200,168,75,0.12)" : "transparent",
+            color: tab === t.id ? "#c8a84b" : "#888",
+            borderBottom: tab === t.id ? "2px solid #c8a84b" : "2px solid transparent",
+            fontSize: 14, fontFamily: "inherit", letterSpacing: 1, transition: "all 0.2s"
+          }}>{t.label}</button>
+        ))}
+      </nav>
+
+      <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
+        {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} />}
+        {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} />}
+        {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} />}
+      </main>
+    </div>
+  );
+}
+
+// ─── Search Tab ───────────────────────────────────────────────────────────────
+function SearchTab({ onAdd, collection }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [cameraMode, setCameraMode] = useState(false);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const [cameraError, setCameraError] = useState("");
+
+  const search = async () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setSelected(null);
+    const cards = await searchCards(query);
+    setResults(cards);
+    setLoading(false);
+    if (cards.length === 1) setSelected(cards[0]);
+  };
+
+  const startCamera = async () => {
+    setCameraError("");
+    setCameraMode(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+    } catch {
+      setCameraError("Camera access denied or unavailable.");
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    setCameraMode(false);
+  };
+
+  const captureFrame = async () => {
+    if (!videoRef.current) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    canvas.getContext("2d").drawImage(videoRef.current, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg");
+    stopCamera();
+    setLoading(true);
+    try {
+      const base64 = dataUrl.split(",")[1];
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 200,
+          messages: [{
+            role: "user", content: [
+              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: base64 } },
+              { type: "text", text: "What is the exact name of this Magic: The Gathering card? Reply with ONLY the card name, nothing else. If you cannot identify it, reply UNKNOWN." }
+            ]
+          }]
+        })
+      });
+      const data = await response.json();
+      const name = data.content?.[0]?.text?.trim();
+      if (name && name !== "UNKNOWN") {
+        setQuery(name);
+        const cards = await searchCards(name);
+        setResults(cards);
+        if (cards.length === 1) setSelected(cards[0]);
+      } else {
+        setCameraError("Could not recognize card. Please try manual entry.");
+      }
+    } catch { setCameraError("Recognition failed. Please try manual entry."); }
+    setLoading(false);
+  };
+
+  const inCollection = selected ? collection.some(c => c.id === selected.id) : false;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()}
+          placeholder="Search card name..." style={{ flex: 1, padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "#e8e0d0", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
+        <button onClick={search} style={btnStyle("#c8a84b", "#1a1200")}>Search</button>
+        <button onClick={cameraMode ? stopCamera : startCamera} style={btnStyle("#4a8a6a", "#001a0d")}>{cameraMode ? "✕ Cancel" : "📷 Scan"}</button>
+      </div>
+
+      {cameraMode && (
+        <div style={{ marginBottom: 16, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(200,168,75,0.3)", position: "relative" }}>
+          <video ref={videoRef} autoPlay playsInline style={{ width: "100%", maxHeight: 300, objectFit: "cover", display: "block" }} />
+          <div style={{ position: "absolute", bottom: 12, left: "50%", transform: "translateX(-50%)" }}>
+            <button onClick={captureFrame} style={btnStyle("#c8a84b", "#1a1200")}>📸 Capture</button>
+          </div>
+        </div>
+      )}
+      {cameraError && <div style={{ color: "#e57373", marginBottom: 12, fontSize: 13 }}>{cameraError}</div>}
+      {loading && <div style={{ color: "#c8a84b", textAlign: "center", padding: 40 }}>✨ Searching the archives...</div>}
+
+      {!loading && results.length > 1 && !selected && (
+        <div>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 8, letterSpacing: 1 }}>SELECT VERSION — {results.length} printings found</div>
+          <div style={{ display: "grid", gap: 4, maxHeight: 320, overflowY: "auto" }}>
+            {results.map(card => (
+              <button key={card.id} onClick={() => setSelected(card)} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "10px 14px", cursor: "pointer", color: "#e8e0d0", display: "flex", alignItems: "center", gap: 12, textAlign: "left", fontFamily: "inherit" }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(200,168,75,0.1)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}>
+                <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3 }} alt="" />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
+                  <div style={{ fontSize: 12, color: "#888" }}>{card.set_name} ({card.set?.toUpperCase()}) · {card.collector_number}</div>
+                </div>
+                <div style={{ color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card)}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function CardDetail({ card, onAdd, inCollection, onBack }) {
+  const [showFull, setShowFull] = useState(false);
+  const img = getImage(card);
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 12, overflow: "hidden" }}>
+      <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>← Back to results</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr" }}>
+        <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+          {img ? (
+            <div>
+              <img src={img} alt={card.name} style={{ width: 200, borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.6)", cursor: "pointer" }} onClick={() => setShowFull(true)} />
+              <div style={{ fontSize: 10, color: "#666", textAlign: "center", marginTop: 4 }}>click to enlarge</div>
+            </div>
+          ) : <div style={{ width: 200, height: 280, background: "rgba(255,255,255,0.05)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", color: "#555" }}>No image</div>}
+          <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
+          <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
+        </div>
+        <div style={{ padding: "20px 20px 20px 0" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
+            <h2 style={{ margin: 0, fontSize: 22, color: "#e8e0d0", fontStyle: "italic" }}>{card.name}</h2>
+            <div style={{ fontSize: 24, color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card)}</div>
+          </div>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>{card.set_name} · {card.set?.toUpperCase()} #{card.collector_number}</div>
+          {card.colors?.length > 0 && <div style={{ marginBottom: 8 }}>{card.colors.map(c => <ColorPip key={c} c={c} />)}</div>}
+          <div style={{ marginBottom: 6 }}>
+            <span style={{ fontSize: 13, color: "#aaa" }}>{card.type_line}</span>
+            {card.power != null && <span style={{ fontSize: 13, color: "#c8a84b", marginLeft: 12 }}>{card.power}/{card.toughness}</span>}
+          </div>
+          {card.mana_cost && <div style={{ fontSize: 13, color: "#888", marginBottom: 10 }}>Mana Cost: {card.mana_cost}</div>}
+          <div style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "12px 14px", marginBottom: 12, fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#d0c8b8", fontStyle: "italic" }}>
+            {getOracleText(card) || "No oracle text"}
+          </div>
+          {card.flavor_text && <div style={{ fontSize: 13, color: "#666", fontStyle: "italic", marginBottom: 12 }}>"{card.flavor_text}"</div>}
+          <button onClick={() => onAdd(card)} style={{ ...btnStyle(inCollection ? "#4a6a4a" : "#c8a84b", inCollection ? "#001a00" : "#1a1200"), fontSize: 15, padding: "12px 24px" }}>
+            {inCollection ? "✓ Add Another Copy" : "+ Add to Collection"}
+          </button>
+        </div>
+      </div>
+      {showFull && (
+        <div onClick={() => setShowFull(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+          <img src={card.image_uris?.large || img} alt={card.name} style={{ maxHeight: "90vh", maxWidth: "90vw", borderRadius: 14 }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Collection Tab ───────────────────────────────────────────────────────────
+function CollectionTab({ collection, onRemove, onQty }) {
+  const [search, setSearch] = useState("");
+  const [filterColor, setFilterColor] = useState("all");
+  const [filterType, setFilterType] = useState("");
+  const [filterMV, setFilterMV] = useState("");
+  const [sortBy, setSortBy] = useState("name");
+
+  let cards = [...collection];
+  if (search) { const q = search.toLowerCase(); cards = cards.filter(c => c.name.toLowerCase().includes(q) || (c.oracle_text || "").toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q)); }
+  if (filterColor !== "all") cards = cards.filter(c => c.colors?.includes(filterColor));
+  if (filterType) cards = cards.filter(c => (c.type_line || "").toLowerCase().includes(filterType.toLowerCase()));
+  if (filterMV !== "") cards = cards.filter(c => c.cmc === parseInt(filterMV));
+  if (sortBy === "name") cards.sort((a, b) => a.name.localeCompare(b.name));
+  if (sortBy === "price") cards.sort((a, b) => getPrice(b) - getPrice(a));
+  if (sortBy === "color") cards.sort((a, b) => (a.colors?.[0] || "Z").localeCompare(b.colors?.[0] || "Z"));
+  if (sortBy === "mv") cards.sort((a, b) => (a.cmc || 0) - (b.cmc || 0));
+
+  const totalValue = collection.reduce((s, c) => s + getPrice(c) * (c.qty || 1), 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+        {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: collection.length }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
+          <div key={s.label} style={{ flex: 1, minWidth: 120, background: "rgba(200,168,75,0.08)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 8, padding: "10px 14px" }}>
+            <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
+            <div style={{ fontSize: 20, fontWeight: "bold", color: "#c8a84b" }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, text, type..." style={filterInputStyle} />
+        <select value={filterColor} onChange={e => setFilterColor(e.target.value)} style={filterInputStyle}>
+          <option value="all">All Colors</option>
+          <option value="W">White</option><option value="U">Blue</option>
+          <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
+        </select>
+        <input value={filterType} onChange={e => setFilterType(e.target.value)} placeholder="Type (Creature, Land...)" style={{ ...filterInputStyle, minWidth: 180 }} />
+        <input value={filterMV} onChange={e => setFilterMV(e.target.value)} placeholder="Mana Value" type="number" min="0" style={{ ...filterInputStyle, width: 100 }} />
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={filterInputStyle}>
+          <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
+          <option value="color">Sort: Color</option><option value="mv">Sort: Mana Value</option>
+        </select>
+      </div>
+      {collection.length === 0
+        ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
+        : <div style={{ display: "grid", gap: 4 }}>{cards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} />)}</div>
+      }
+    </div>
+  );
+}
+
+function CollectionRow({ card, onRemove, onQty }) {
+  const [expanded, setExpanded] = useState(false);
+  const img = getImage(card);
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, overflow: "hidden", borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer" }} onClick={() => setExpanded(!expanded)}>
+        {img && <img src={img} style={{ width: 40, borderRadius: 4 }} alt="" />}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
+          <div style={{ fontSize: 12, color: "#666" }}>{card.type_line} · {card.set_name}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {card.colors?.map(c => <ColorPip key={c} c={c} />)}
+          <span style={{ fontSize: 12, color: "#888" }}>CMC {card.cmc || 0}</span>
+        </div>
+        <div style={{ color: "#c8a84b", fontWeight: "bold", minWidth: 60, textAlign: "right" }}>{getPriceLabel(card)}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button onClick={e => { e.stopPropagation(); onQty(card.id, -1); }} style={qtyBtn}>−</button>
+          <span style={{ minWidth: 24, textAlign: "center", fontSize: 14 }}>{card.qty || 1}</span>
+          <button onClick={e => { e.stopPropagation(); onQty(card.id, 1); }} style={qtyBtn}>+</button>
+        </div>
+        <div style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card) * (card.qty || 1)).toFixed(2)}</div>
+        <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>
+      </div>
+      {expanded && (
+        <div style={{ padding: "0 14px 14px 66px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          <div style={{ paddingTop: 10, fontSize: 13, color: "#d0c8b8", whiteSpace: "pre-wrap", fontStyle: "italic", lineHeight: 1.6 }}>{getOracleText(card)}</div>
+          {card.flavor_text && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginTop: 6 }}>"{card.flavor_text}"</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
+            <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Decks Tab ────────────────────────────────────────────────────────────────
+function DecksTab({ decks, setDecks, collection }) {
+  const [activeDeck, setActiveDeck] = useState(null);
+  const [newDeckName, setNewDeckName] = useState("");
+
+  const createDeck = () => {
+    if (!newDeckName.trim()) return;
+    const deck = { id: Date.now().toString(), name: newDeckName.trim(), cards: [] };
+    setDecks(d => [...d, deck]);
+    setNewDeckName("");
+    setActiveDeck(deck.id);
+  };
+
+  const deleteDeck = (id) => { setDecks(d => d.filter(dk => dk.id !== id)); if (activeDeck === id) setActiveDeck(null); };
+
+  const updateDeck = (deckId, updater) => setDecks(d => d.map(dk => dk.id === deckId ? updater(dk) : dk));
+
+  const currentDeck = decks.find(d => d.id === activeDeck);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20, alignItems: "start" }}>
+      <div>
+        <div style={{ marginBottom: 12 }}>
+          <input value={newDeckName} onChange={e => setNewDeckName(e.target.value)} onKeyDown={e => e.key === "Enter" && createDeck()} placeholder="New deck name..." style={{ ...filterInputStyle, width: "100%", marginBottom: 6, boxSizing: "border-box" }} />
+          <button onClick={createDeck} style={{ ...btnStyle("#c8a84b", "#1a1200"), width: "100%", boxSizing: "border-box" }}>+ Create Deck</button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {decks.map(dk => {
+            const deckTotal = dk.cards.reduce((s, c) => { const col = collection.find(col => col.id === c.collectionId); return s + (col ? getPrice(col) * c.qty : 0); }, 0);
+            return (
+              <div key={dk.id} onClick={() => setActiveDeck(dk.id)} style={{ padding: "10px 12px", borderRadius: 8, cursor: "pointer", background: activeDeck === dk.id ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${activeDeck === dk.id ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, position: "relative" }}>
+                <div style={{ fontWeight: "bold", fontSize: 14 }}>{dk.name}</div>
+                <div style={{ fontSize: 12, color: "#888" }}>{dk.cards.reduce((s, c) => s + c.qty, 0)} cards · ${deckTotal.toFixed(2)}</div>
+                <button onClick={e => { e.stopPropagation(); deleteDeck(dk.id); }} style={{ position: "absolute", top: 6, right: 8, background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
+              </div>
+            );
+          })}
+          {decks.length === 0 && <div style={{ color: "#555", fontSize: 13, padding: 12 }}>No decks yet</div>}
+        </div>
+      </div>
+
+      {currentDeck ? (
+        <DeckEditor
+          deck={currentDeck}
+          collection={collection}
+          onAdd={cardId => updateDeck(currentDeck.id, dk => {
+            const existing = dk.cards.find(c => c.collectionId === cardId);
+            return existing
+              ? { ...dk, cards: dk.cards.map(c => c.collectionId === cardId ? { ...c, qty: c.qty + 1 } : c) }
+              : { ...dk, cards: [...dk.cards, { collectionId: cardId, qty: 1 }] };
+          })}
+          onRemove={cardId => updateDeck(currentDeck.id, dk => ({ ...dk, cards: dk.cards.filter(c => c.collectionId !== cardId) }))}
+          onQty={(cardId, delta) => updateDeck(currentDeck.id, dk => ({
+            ...dk, cards: dk.cards.map(c => c.collectionId !== cardId ? c : { ...c, qty: Math.max(0, c.qty + delta) }).filter(c => c.qty > 0)
+          }))}
+        />
+      ) : (
+        <div style={{ textAlign: "center", padding: 60, color: "#555" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🃏</div>
+          <div>Select or create a deck</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
+  const [search, setSearch] = useState("");
+  const deckCards = deck.cards.map(c => ({ ...collection.find(col => col.id === c.collectionId), deckQty: c.qty })).filter(c => c.id);
+  const totalCards = deck.cards.reduce((s, c) => s + c.qty, 0);
+  const totalValue = deckCards.reduce((s, c) => s + getPrice(c) * (c.deckQty || 0), 0);
+  const typeCounts = {};
+  deckCards.forEach(c => { const t = (c.type_line || "").split("—")[0].trim().split(" ").pop(); typeCounts[t] = (typeCounts[t] || 0) + (c.deckQty || 0); });
+  const available = collection.filter(c => { const q = search.toLowerCase(); return !q || c.name.toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q); });
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
+        <h2 style={{ margin: 0, color: "#c8a84b", fontStyle: "italic" }}>{deck.name}</h2>
+        <div style={{ fontSize: 13, color: "#888" }}>{totalCards} cards · ${totalValue.toFixed(2)}</div>
+        <div style={{ fontSize: 12, color: "#666" }}>{Object.entries(typeCounts).map(([t, n]) => `${t}(${n})`).join(" · ")}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
+          {deckCards.length === 0
+            ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {deckCards.map(card => (
+                <div key={card.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 6, borderLeft: `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}` }}>
+                  <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
+                  <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
+                  <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
+                  <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
+                  <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
+                  <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                </div>
+              ))}
+            </div>
+          }
+        </div>
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>ADD FROM COLLECTION</div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter collection..." style={{ ...filterInputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
+          <div style={{ maxHeight: 400, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+            {available.map(card => {
+              const inDeck = deck.cards.find(c => c.collectionId === card.id);
+              return (
+                <button key={card.id} onClick={() => onAdd(card.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
+                  <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
+                  <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
+                  {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
+                  <span style={{ fontSize: 13, color: "#c8a84b" }}>+</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Style helpers ────────────────────────────────────────────────────────────
+function btnStyle(bg, textColor) {
+  return { padding: "10px 18px", background: bg, color: textColor, border: "none", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontWeight: "bold", fontSize: 13, letterSpacing: 0.5, whiteSpace: "nowrap" };
+}
+function linkStyle(bg) {
+  return { display: "inline-block", padding: "6px 14px", background: bg, color: "#fff", borderRadius: 6, textDecoration: "none", fontSize: 12, fontWeight: "bold", letterSpacing: 0.5 };
+}
+const filterInputStyle = { padding: "8px 12px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 6, color: "#e8e0d0", fontSize: 13, fontFamily: "inherit", outline: "none" };
+const qtyBtn = { background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "#e8e0d0", cursor: "pointer", width: 22, height: 22, padding: 0, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" };
