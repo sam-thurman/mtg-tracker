@@ -759,6 +759,7 @@ function CardTooltip({ card, x, y }) {
 
 function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState("deck"); // "deck" | "combos"
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
   const deckCards = deck.cards.map(c => ({ ...collection.find(col => col.id === c.collectionId), deckQty: c.qty })).filter(c => c.id);
   const totalCards = deck.cards.reduce((s, c) => s + c.qty, 0);
@@ -779,6 +780,16 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
         <div style={{ fontSize: 13, color: "#888" }}>{totalCards} cards · ${totalValue.toFixed(2)}</div>
         <div style={{ fontSize: 12, color: "#666" }}>{Object.entries(typeCounts).map(([t, n]) => `${t}(${n})`).join(" · ")}</div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {/* View mode tabs */}
+          {[{ id: "deck", label: "📋 Deck" }, { id: "combos", label: "⚡ Combos" }, ...(deck.format === "Commander" ? [{ id: "synergies", label: "🧬 Commander Synergies" }] : [])].map(v => (
+            <button key={v.id} onClick={() => setViewMode(v.id)} style={{
+              padding: "5px 12px", borderRadius: 6, border: "1px solid", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold",
+              background: viewMode === v.id ? "rgba(200,168,75,0.15)" : "rgba(255,255,255,0.04)",
+              color: viewMode === v.id ? "#c8a84b" : "#666",
+              borderColor: viewMode === v.id ? "rgba(200,168,75,0.4)" : "rgba(255,255,255,0.1)",
+            }}>{v.label}</button>
+          ))}
+          <span style={{ width: 1, background: "rgba(255,255,255,0.1)", alignSelf: "stretch", margin: "0 4px" }} />
           <span style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>FORMAT</span>
           {["Standard", "Commander"].map(fmt => (
             <button key={fmt} onClick={() => onUpdate(dk => ({ ...dk, format: fmt, commander: fmt === "Standard" ? "" : dk.commander }))}
@@ -827,61 +838,397 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
           )}
         </div>
       )}
-      <div className="deck-editor-grid">
-        <div>
-          <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
-          {deckCards.length === 0
-            ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
-            : <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              {deckCards.map(card => {
-                const isCommander = deck.format === "Commander" && card.id === deck.commander;
+      {viewMode === "deck" ? (
+        <div className="deck-editor-grid">
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
+            {deckCards.length === 0
+              ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
+              : <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {deckCards.map(card => {
+                  const isCommander = deck.format === "Commander" && card.id === deck.commander;
+                  return (
+                    <div key={card.id}
+                      onMouseEnter={e => handleMouseEnter(card, e)}
+                      onMouseMove={e => handleMouseMove(card, e)}
+                      onMouseLeave={handleMouseLeave}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
+                        background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
+                        borderRadius: 6,
+                        borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
+                        cursor: "default"
+                      }}>
+                      {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
+                      <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
+                      <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
+                      <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
+                      <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
+                      <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
+                      <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            }
+          </div>
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>ADD FROM COLLECTION</div>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter collection..." style={{ ...filterInputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
+            <div style={{ maxHeight: 400, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+              {available.map(card => {
+                const inDeck = deck.cards.find(c => c.collectionId === card.id);
                 return (
-                  <div key={card.id}
+                  <button key={card.id} onClick={() => onAdd(card.id)}
                     onMouseEnter={e => handleMouseEnter(card, e)}
                     onMouseMove={e => handleMouseMove(card, e)}
                     onMouseLeave={handleMouseLeave}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
-                      background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
-                      borderRadius: 6,
-                      borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
-                      cursor: "default"
-                    }}>
-                    {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
-                    <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
-                    <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
-                    <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
-                    <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
-                    <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
-                    <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
+                    <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
+                    <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
+                    {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
+                    <span style={{ fontSize: 13, color: "#c8a84b" }}>+</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : viewMode === "synergies" ? (
+        <CommanderSynergies commanderCard={commanderCard} deckCards={deckCards} collection={collection} />
+      ) : (
+        <DeckCombos deckCards={deckCards} collection={collection} />
+      )}
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+    </div>
+  );
+}
+
+// ─── Deck Combo Finder ──────────────────────────────────────────────────────
+const CSB_BASE = "https://backend.commanderspellbook.com/variants";
+
+async function fetchCombosForCard(cardName) {
+  const q = encodeURIComponent(`card="${cardName}"`);
+  const r = await fetch(`${CSB_BASE}/?q=${q}`);
+  if (!r.ok) return [];
+  const d = await r.json();
+  return d.results || [];
+}
+
+function DeckCombos({ deckCards, collection }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [combos, setCombos] = useState([]);
+  const [expanded, setExpanded] = useState({}); // variantId -> bool
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+
+  const deckNames = new Set(deckCards.map(c => c.name?.toLowerCase()));
+  const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
+
+  const findCombos = async () => {
+    if (deckCards.length === 0) return;
+    setStatus("loading");
+    setCombos([]);
+    try {
+      // Fetch combos for each unique card name (cap at 40 to avoid API abuse)
+      const names = [...new Set(deckCards.map(c => c.name).filter(Boolean))].slice(0, 40);
+      const results = await Promise.all(names.map(fetchCombosForCard));
+      // Deduplicate by variant id
+      const seen = new Set();
+      const all = [];
+      results.flat().forEach(v => { if (!seen.has(v.id)) { seen.add(v.id); all.push(v); } });
+      // Score: how many cards in this combo are owned in the deck
+      const scored = all.map(v => {
+        const comboNames = v.uses.map(u => u.card.name.toLowerCase());
+        const owned = comboNames.filter(n => deckNames.has(n)).length;
+        return { ...v, _owned: owned, _total: comboNames.length };
+      });
+      // Sort: fully-owned combos first, then by coverage desc, then popularity desc
+      scored.sort((a, b) =>
+        b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity
+      );
+      setCombos(scored);
+      setStatus("done");
+    } catch (e) {
+      setStatus("error");
+    }
+  };
+
+  if (status === "idle") return (
+    <div style={{ textAlign: "center", padding: "40px 20px" }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>⚡</div>
+      <div style={{ color: "#888", fontSize: 14, marginBottom: 20 }}>Scan your deck for known combos via Commander Spellbook</div>
+      <button onClick={findCombos} style={btnStyle("#c8a84b", "#1a1200")}>Find Combos</button>
+    </div>
+  );
+
+  if (status === "loading") return (
+    <div style={{ textAlign: "center", padding: 40, color: "#c8a84b" }}>⟳ Scanning {deckCards.length} cards...</div>
+  );
+
+  if (status === "error") return (
+    <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
+      Failed to fetch combos.
+      <button onClick={() => setStatus("idle")} style={{ marginLeft: 12, background: "none", border: "none", color: "#888", cursor: "pointer" }}>Try again</button>
+    </div>
+  );
+
+  const fullCombos = combos.filter(c => c._owned === c._total);
+  const partialCombos = combos.filter(c => c._owned > 0 && c._owned < c._total);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, color: "#888" }}>
+          {combos.length} combos found ·
+          <span style={{ color: "#4ade80", marginLeft: 6 }}>{fullCombos.length} complete</span>
+          <span style={{ color: "#c8a84b", marginLeft: 6 }}>{partialCombos.length} partial</span>
+        </div>
+        <button onClick={() => setStatus("idle")} style={{ marginLeft: "auto", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit" }}>↺ Rescan</button>
+      </div>
+
+      {combos.length === 0 && (
+        <div style={{ textAlign: "center", padding: 40, color: "#555" }}>No combos found for this deck.</div>
+      )}
+
+      {[{ label: "✅ Complete Combos", list: fullCombos, accent: "#4ade80" },
+      { label: "⚡ Partial Combos (missing cards)", list: partialCombos, accent: "#c8a84b" }]
+        .map(({ label, list, accent }) => list.length === 0 ? null : (
+          <div key={label} style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1, color: accent, marginBottom: 8 }}>{label.toUpperCase()}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {list.map(variant => {
+                const isOpen = expanded[variant.id];
+                return (
+                  <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${variant._owned === variant._total ? "rgba(74,222,128,0.2)" : "rgba(200,168,75,0.15)"}`, borderRadius: 8, overflow: "hidden" }}>
+                    {/* Header row */}
+                    <div onClick={() => setExpanded(e => ({ ...e, [variant.id]: !e[variant.id] }))}
+                      style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", cursor: "pointer" }}>
+                      {/* Card thumbnails */}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, flex: 1 }}>
+                        {variant.uses.map(u => {
+                          const lc = u.card.name.toLowerCase();
+                          const owned = collectionNames.has(lc);
+                          const inDeck = deckNames.has(lc);
+                          // Normalize the Spellbook card object so CardTooltip can use it
+                          const tooltipCard = { id: String(u.card.id), name: u.card.name, image_uris: { normal: u.card.imageUriFrontNormal } };
+                          // Border: purple > green > default (in-deck takes visual priority)
+                          const borderColor = inDeck ? "rgba(168,85,247,0.5)" : owned ? "rgba(74,222,128,0.3)" : "rgba(255,255,255,0.1)";
+                          const bgColor = inDeck ? "rgba(168,85,247,0.15)" : owned ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.05)";
+                          const textColor = inDeck ? "#c084fc" : owned ? "#86efac" : "#888";
+                          return (
+                            <span key={u.card.id}
+                              onMouseEnter={e => handleMouseEnter(tooltipCard, e)}
+                              onMouseMove={e => handleMouseMove(tooltipCard, e)}
+                              onMouseLeave={handleMouseLeave}
+                              style={{
+                                fontSize: 12, padding: "2px 7px", borderRadius: 4, cursor: "default",
+                                background: bgColor, border: `1px solid ${borderColor}`, color: textColor
+                              }}>
+                              {inDeck ? "⧓ " : owned ? "✓ " : ""}{u.card.name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {/* Results */}
+                      <div style={{ minWidth: 120, textAlign: "right" }}>
+                        {variant.produces.slice(0, 2).map(p => (
+                          <div key={p.feature.id} style={{ fontSize: 11, color: "#a855f7" }}>{p.feature.name}</div>
+                        ))}
+                        {variant.produces.length > 2 && <div style={{ fontSize: 10, color: "#666" }}>+{variant.produces.length - 2} more</div>}
+                      </div>
+                      <span style={{ color: "#555", fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
+                    </div>
+                    {/* Expanded detail */}
+                    {isOpen && (
+                      <div style={{ padding: "0 14px 14px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                        {variant.notablePrerequisites && (
+                          <div style={{ marginTop: 10, marginBottom: 8 }}>
+                            <div style={{ fontSize: 10, color: "#888", letterSpacing: 1, marginBottom: 4 }}>PREREQUISITES</div>
+                            <div style={{ fontSize: 12, color: "#ffb74d", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{variant.notablePrerequisites}</div>
+                          </div>
+                        )}
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ fontSize: 10, color: "#888", letterSpacing: 1, marginBottom: 4 }}>STEPS</div>
+                          <div style={{ fontSize: 12, color: "#d0c8b8", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{variant.description}</div>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                          {variant.produces.map(p => (
+                            <span key={p.feature.id} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>{p.feature.name}</span>
+                          ))}
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 11, color: "#555" }}>Popularity: {variant.popularity} · {variant._owned}/{variant._total} cards owned</div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          }
-        </div>
-        <div>
-          <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>ADD FROM COLLECTION</div>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter collection..." style={{ ...filterInputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
-          <div style={{ maxHeight: 400, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-            {available.map(card => {
-              const inDeck = deck.cards.find(c => c.collectionId === card.id);
-              return (
-                <button key={card.id} onClick={() => onAdd(card.id)}
-                  onMouseEnter={e => handleMouseEnter(card, e)}
-                  onMouseMove={e => handleMouseMove(card, e)}
-                  onMouseLeave={handleMouseLeave}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
-                  <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
-                  <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
-                  {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
-                  <span style={{ fontSize: 13, color: "#c8a84b" }}>+</span>
-                </button>
-              );
-            })}
           </div>
-        </div>
+        ))
+      }
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+    </div>
+  );
+}
+
+// ─── Commander Synergies (EDHREC) ─────────────────────────────────────────────────────
+// Convert a card name to an EDHREC slug: "Atraxa, Praetors' Voice" -> "atraxa-praetors-voice"
+function toEdhrecSlug(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "") // strip apostrophes, commas, etc.
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+// Category display config
+const EDHREC_CATEGORIES = [
+  { tag: "highsynergycards", label: "High Synergy", accent: "#a855f7" },
+  { tag: "newcards", label: "New Cards", accent: "#38bdf8" },
+  { tag: "topcards", label: "Top Cards", accent: "#c8a84b" },
+  { tag: "creatures", label: "Creatures", accent: "#4ade80" },
+  { tag: "instants", label: "Instants", accent: "#60a5fa" },
+  { tag: "sorceries", label: "Sorceries", accent: "#f472b6" },
+  { tag: "enchantments", label: "Enchantments", accent: "#facc15" },
+  { tag: "utilityartifacts", label: "Artifacts", accent: "#94a3b8" },
+  { tag: "planeswalkers", label: "Planeswalkers", accent: "#fb923c" },
+  { tag: "manaartifacts", label: "Mana Artifacts", accent: "#78716c" },
+  { tag: "utilitylands", label: "Utility Lands", accent: "#a16207" },
+];
+
+function CommanderSynergies({ commanderCard, deckCards, collection }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [data, setData] = useState(null);
+  const [openCats, setOpenCats] = useState({ highsynergycards: true, newcards: true, topcards: true });
+  const [filter, setFilter] = useState("");
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+
+  const deckNames = new Set(deckCards.map(c => c.name?.toLowerCase()));
+  const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
+
+  const load = async () => {
+    if (!commanderCard) return;
+    setStatus("loading");
+    try {
+      const slug = toEdhrecSlug(commanderCard.name);
+      const res = await fetch(`https://json.edhrec.com/pages/commanders/${slug}.json`);
+      if (!res.ok) throw new Error(res.status);
+      const json = await res.json();
+      setData(json);
+      setStatus("done");
+    } catch (e) {
+      setStatus("error");
+    }
+  };
+
+  if (!commanderCard) return (
+    <div style={{ textAlign: "center", padding: 40, color: "#555" }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>🧬</div>
+      <div>Set a Commander on this deck to view EDHREC synergy recommendations.</div>
+    </div>
+  );
+
+  if (status === "idle") return (
+    <div style={{ textAlign: "center", padding: "40px 20px" }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>🧬</div>
+      <div style={{ color: "#888", fontSize: 14, marginBottom: 6 }}>Load EDHREC recommendations for</div>
+      <div style={{ fontWeight: "bold", fontSize: 16, color: "#e8e0d0", marginBottom: 20 }}>{commanderCard.name}</div>
+      <button onClick={load} style={btnStyle("#a855f7", "#fff")}>Load Synergies</button>
+    </div>
+  );
+
+  if (status === "loading") return (
+    <div style={{ textAlign: "center", padding: 40, color: "#a855f7" }}>⟳ Loading EDHREC data...</div>
+  );
+
+  if (status === "error") return (
+    <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
+      Failed to load EDHREC data. Commander name may not match EDHREC's format.
+      <button onClick={() => setStatus("idle")} style={{ display: "block", margin: "12px auto 0", background: "none", border: "none", color: "#888", cursor: "pointer" }}>Try again</button>
+    </div>
+  );
+
+  const cardlists = data?.container?.json_dict?.cardlists || [];
+  const edhrecNum = data?.num_decks_avg || 0;
+
+  // Build a map: tag -> cardviews
+  const byTag = {};
+  cardlists.forEach(cl => { byTag[cl.tag] = cl.cardviews || []; });
+
+  const q = filter.toLowerCase();
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, color: "#888" }}>EDHREC data for <span style={{ color: "#a855f7", fontWeight: "bold" }}>{commanderCard.name}</span> · ~{edhrecNum.toLocaleString()} decks</div>
+        <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter cards..." style={{ ...filterInputStyle, marginLeft: "auto", width: 180 }} />
+        <button onClick={() => setStatus("idle")} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit" }}>↺ Reload</button>
       </div>
+      {/* Column legend */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 16, marginBottom: 6, paddingRight: 10 }}>
+        <span style={{ fontSize: 10, color: "#555" }} title="How much more (or less) often this card is played with this commander compared to other decks of the same colors">syn% = synergy with commander</span>
+        <span style={{ fontSize: 10, color: "#555" }} title="Percentage of eligible EDHREC decks that include this card">% = overall inclusion rate</span>
+      </div>
+
+      {EDHREC_CATEGORIES.map(cat => {
+        const cards = (byTag[cat.tag] || []).filter(c => !q || c.name.toLowerCase().includes(q));
+        if (cards.length === 0) return null;
+        const isOpen = openCats[cat.tag];
+        const ownedCount = cards.filter(c => collectionNames.has(c.name.toLowerCase())).length;
+        const inDeckCount = cards.filter(c => deckNames.has(c.name.toLowerCase())).length;
+        return (
+          <div key={cat.tag} style={{ marginBottom: 10 }}>
+            {/* Section header */}
+            <div onClick={() => setOpenCats(o => ({ ...o, [cat.tag]: !o[cat.tag] }))}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, cursor: "pointer", marginBottom: isOpen ? 4 : 0 }}>
+              <span style={{ fontSize: 11, fontWeight: "bold", letterSpacing: 1, color: cat.accent }}>{cat.label.toUpperCase()}</span>
+              <span style={{ fontSize: 11, color: "#555" }}>{cards.length} cards</span>
+              {ownedCount > 0 && <span style={{ fontSize: 11, color: "#4ade80" }}>✓ {ownedCount} owned</span>}
+              {inDeckCount > 0 && <span style={{ fontSize: 11, color: "#c084fc" }}>⧓ {inDeckCount} in deck</span>}
+              <span style={{ marginLeft: "auto", color: "#555", fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
+            </div>
+            {isOpen && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {cards.map(card => {
+                  const lc = card.name.toLowerCase();
+                  const owned = collectionNames.has(lc);
+                  const inDeck = deckNames.has(lc);
+                  const synPct = card.synergy != null ? (card.synergy * 100).toFixed(0) : null;
+                  const inclPct = card.potential_decks > 0 ? ((card.num_decks / card.potential_decks) * 100).toFixed(0) : 0;
+                  // Visual priority: in-deck (purple) > owned (green) > default
+                  const rowBg = inDeck ? "rgba(168,85,247,0.08)" : owned ? "rgba(74,222,128,0.06)" : "rgba(255,255,255,0.02)";
+                  const rowBorder = inDeck ? "#a855f7" : owned ? "#4ade80" : "rgba(255,255,255,0.06)";
+                  const nameColor = inDeck ? "#c084fc" : owned ? "#86efac" : "#e8e0d0";
+                  return (
+                    <div key={card.id}
+                      onMouseEnter={e => handleMouseEnter({ id: card.id, name: card.name, image_uris: { normal: `https://cards.scryfall.io/normal/front/${card.id[0]}/${card.id[1]}/${card.id}.jpg` } }, e)}
+                      onMouseMove={e => handleMouseMove({ id: card.id, name: card.name, image_uris: { normal: `https://cards.scryfall.io/normal/front/${card.id[0]}/${card.id[1]}/${card.id}.jpg` } }, e)}
+                      onMouseLeave={handleMouseLeave}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "5px 10px",
+                        background: rowBg, borderRadius: 5,
+                        borderLeft: `2px solid ${rowBorder}`, cursor: "default"
+                      }}>
+                      {inDeck && <span style={{ fontSize: 11, color: "#c084fc", flexShrink: 0 }} title="In deck">⧓</span>}
+                      {!inDeck && owned && <span style={{ fontSize: 11, color: "#4ade80", flexShrink: 0 }} title="In collection">✓</span>}
+                      <div style={{ flex: 1, fontSize: 13, color: nameColor, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{card.name}</div>
+                      {synPct !== null && (
+                        <span style={{
+                          fontSize: 10, padding: "1px 6px", borderRadius: 3, flexShrink: 0,
+                          background: card.synergy > 0.15 ? "rgba(168,85,247,0.2)" : card.synergy > 0 ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
+                          color: card.synergy > 0.15 ? "#c084fc" : card.synergy > 0 ? "#888" : "#555",
+                        }}>{synPct > 0 ? "+" : ""}{synPct}% syn</span>
+                      )}
+                      <span style={{ fontSize: 10, color: "#555", flexShrink: 0, minWidth: 36, textAlign: "right" }}>{inclPct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
