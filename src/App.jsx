@@ -168,14 +168,23 @@ function rowToCard(row) {
   } catch { return null; }
 }
 
-// Decks sheet columns: id | name | cards_json | format | commander
-function deckToRow(deck) {
-  return [deck.id, deck.name, JSON.stringify(deck.cards), deck.format || "", deck.commander || ""];
+// Decks sheet columns: id | name | format | commander (name) | cards_json
+function deckToRow(deck, collection) {
+  // Look up commander name from its collection card ID
+  const commanderName = deck.commander
+    ? (collection?.find(c => c.id === deck.commander)?.name || "")
+    : "";
+  return [deck.id, deck.name, deck.format || "", commanderName, JSON.stringify(deck.cards)];
 }
 
-function rowToDeck(row) {
+function rowToDeck(row, collection) {
   try {
-    return { id: row[0], name: row[1], cards: JSON.parse(row[2] || "[]"), format: row[3] || "Standard", commander: row[4] || "" };
+    // Look up commander ID from the stored name
+    const commanderName = row[3] || "";
+    const commanderId = commanderName
+      ? (collection?.find(c => c.name === commanderName)?.id || "")
+      : "";
+    return { id: row[0], name: row[1], format: row[2] || "Standard", commander: commanderId, cards: JSON.parse(row[4] || "[]") };
   } catch { return null; }
 }
 
@@ -227,7 +236,7 @@ export default function App() {
         sheetsGet("Decks!A2:E1000"),
       ]);
       const cards = collRows.map(rowToCard).filter(Boolean);
-      const dks = deckRows.map(rowToDeck).filter(Boolean);
+      const dks = deckRows.map(row => rowToDeck(row, cards)).filter(Boolean);
       setCollection(cards);
       setDecks(dks);
       setSyncStatus("idle");
@@ -257,7 +266,7 @@ export default function App() {
         // Write decks
         await sheetsClear("Decks!A2:E1000", token);
         if (dks.length > 0) {
-          await sheetsUpdate("Decks!A2", dks.map(deckToRow), token);
+          await sheetsUpdate("Decks!A2", dks.map(dk => deckToRow(dk, col)), token);
         }
         setSyncStatus("idle");
         setSyncMsg(`Saved ${new Date().toLocaleTimeString()}`);
@@ -299,6 +308,18 @@ export default function App() {
 
   const updateQty = useCallback((cardId, delta) => {
     setCollection(prev => { const n = prev.map(c => c.id === cardId ? { ...c, qty: Math.max(1, (c.qty || 1) + delta) } : c); setTimeout(triggerSave, 0); return n; });
+  }, [triggerSave]);
+
+  // Toggle a collection card into/out of a specific deck
+  const toggleCardInDeck = useCallback((collectionCard, deckId) => {
+    setDecks(prev => prev.map(dk => {
+      if (dk.id !== deckId) return dk;
+      const exists = dk.cards.some(c => c.collectionId === collectionCard.id);
+      return exists
+        ? { ...dk, cards: dk.cards.filter(c => c.collectionId !== collectionCard.id) }
+        : { ...dk, cards: [...dk.cards, { collectionId: collectionCard.id, qty: 1 }] };
+    }));
+    setTimeout(triggerSave, 0);
   }, [triggerSave]);
 
   const totalValue = collection.reduce((sum, c) => sum + getPrice(c) * (c.qty || 1), 0);
@@ -357,8 +378,8 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} />}
-        {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} />}
+        {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} />}
+        {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} decks={decks} onToggleDeck={toggleCardInDeck} />}
         {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} />}
       </main>
     </div>
@@ -366,7 +387,7 @@ export default function App() {
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ onAdd, collection }) {
+function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -487,15 +508,47 @@ function SearchTab({ onAdd, collection }) {
         </div>
       )}
 
-      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} />}
+      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} />}
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
 }
 
-function CardDetail({ card, onAdd, inCollection, onBack }) {
+function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, collection }) {
   const [showFull, setShowFull] = useState(false);
+  const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
+  const [pendingDeckId, setPendingDeckId] = useState(null); // deck awaiting collection prompt
   const img = getImage(card);
+
+  // Find the collection entry for this Scryfall card (matched by Scryfall id)
+  const collectionCard = collection?.find(c => c.id === card.id);
+
+  const handleDeckToggle = (deckId) => {
+    if (collectionCard) {
+      // Already in collection — toggle directly
+      onToggleDeck(collectionCard, deckId);
+    } else {
+      // Not in collection — check if we're removing (it could already be in deck via a prior add)
+      // If card is being added (not yet in deck), prompt to add to collection
+      const deck = decks?.find(d => d.id === deckId);
+      const alreadyInDeck = deck?.cards.some(c => c.collectionId === card.id);
+      if (alreadyInDeck) {
+        // Just remove — use card.id directly as a pseudo-collectionId
+        onToggleDeck({ id: card.id }, deckId);
+      } else {
+        // Adding to deck — show collection prompt first
+        setPendingDeckId(deckId);
+      }
+    }
+  };
+
+  const handleAddToDeckWithCollection = (alsoAddToCollection) => {
+    const deckId = pendingDeckId;
+    setPendingDeckId(null);
+    if (alsoAddToCollection) onAdd(card);
+    // Use the card's Scryfall id as the collectionId (onAdd will create it with this id)
+    onToggleDeck({ id: card.id }, deckId);
+  };
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 12, overflow: "hidden" }}>
       <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -528,9 +581,27 @@ function CardDetail({ card, onAdd, inCollection, onBack }) {
             {getOracleText(card) || "No oracle text"}
           </div>
           {card.flavor_text && <div style={{ fontSize: 13, color: "#666", fontStyle: "italic", marginBottom: 12 }}>"{card.flavor_text}"</div>}
-          <button onClick={() => onAdd(card)} style={{ ...btnStyle(inCollection ? "#4a6a4a" : "#c8a84b", inCollection ? "#001a00" : "#1a1200"), fontSize: 15, padding: "12px 24px" }}>
-            {inCollection ? "✓ Add Another Copy" : "+ Add to Collection"}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={() => onAdd(card)} style={{ ...btnStyle(inCollection ? "#4a6a4a" : "#c8a84b", inCollection ? "#001a00" : "#1a1200"), fontSize: 15, padding: "12px 24px" }}>
+              {inCollection ? "✓ Add Another Copy" : "+ Add to Collection"}
+            </button>
+            {decks && decks.length > 0 && (
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setDeckSelectorOpen(o => !o)}
+                  style={{ ...btnStyle("#3b2d6e", "#c084fc"), fontSize: 14, padding: "12px 18px" }}>
+                  🃏 Add to Deck ▾
+                </button>
+                {deckSelectorOpen && (
+                  <DeckSelector
+                    card={collectionCard || card}
+                    decks={decks}
+                    onToggle={handleDeckToggle}
+                    onClose={() => setDeckSelectorOpen(false)}
+                  />
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       {showFull && (
@@ -538,12 +609,91 @@ function CardDetail({ card, onAdd, inCollection, onBack }) {
           <img src={card.image_uris?.large || img} alt={card.name} style={{ maxHeight: "90vh", maxWidth: "90vw", borderRadius: 14 }} />
         </div>
       )}
+      {pendingDeckId && (
+        <AddToCollectionPrompt
+          cardName={card.name}
+          onYes={() => handleAddToDeckWithCollection(true)}
+          onNo={() => handleAddToDeckWithCollection(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Shared deck-management components ───────────────────────────────────────
+
+// Floating popover: list of decks with checkmarks.
+// card: the collection card (has .id used as collectionId).
+// onToggle(deckId) is called when user clicks a row.
+function DeckSelector({ card, decks, onToggle, onClose, alignRight }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  return (
+    <div ref={ref} style={{
+      position: "absolute", top: "calc(100% + 6px)",
+      [alignRight ? "right" : "left"]: 0, zIndex: 300,
+      background: "#1a1a20", border: "1px solid rgba(168,85,247,0.3)",
+      borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
+      minWidth: 220, maxHeight: 320, overflowY: "auto", padding: 6,
+    }}>
+      <div style={{ fontSize: 10, letterSpacing: 1, color: "#666", padding: "4px 8px 6px" }}>ADD / REMOVE FROM DECK</div>
+      {decks.length === 0 && <div style={{ padding: "8px 10px", fontSize: 13, color: "#555" }}>No decks yet.</div>}
+      {decks.map(dk => {
+        const inDeck = dk.cards.some(c => c.collectionId === card.id);
+        return (
+          <div key={dk.id} onClick={() => onToggle(dk.id)}
+            style={{
+              display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
+              borderRadius: 6, cursor: "pointer", marginBottom: 2,
+              background: inDeck ? "rgba(168,85,247,0.12)" : "rgba(255,255,255,0.02)",
+            }}>
+            <div style={{
+              width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+              border: `1.5px solid ${inDeck ? "#a855f7" : "rgba(255,255,255,0.2)"}`,
+              background: inDeck ? "rgba(168,85,247,0.3)" : "transparent",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              {inDeck && <span style={{ fontSize: 10, color: "#c084fc" }}>✓</span>}
+            </div>
+            <div style={{ flex: 1, fontSize: 13, color: inDeck ? "#c084fc" : "#e8e0d0" }}>{dk.name}</div>
+            <span style={{
+              fontSize: 9, fontWeight: "bold", padding: "1px 5px", borderRadius: 3,
+              background: dk.format === "Commander" ? "rgba(138,43,226,0.2)" : "rgba(200,168,75,0.1)",
+              color: dk.format === "Commander" ? "#c084fc" : "#c8a84b",
+            }}>{dk.format === "Commander" ? "CMD" : "STD"}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Modal: "Add this card to your collection too?"
+function AddToCollectionPrompt({ cardName, onYes, onNo }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#1a1a20", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 14, padding: "28px 32px", maxWidth: 360, textAlign: "center", boxShadow: "0 12px 40px rgba(0,0,0,0.8)" }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>📚</div>
+        <div style={{ fontSize: 16, fontWeight: "bold", color: "#e8e0d0", marginBottom: 8 }}>{cardName}</div>
+        <div style={{ fontSize: 14, color: "#888", marginBottom: 24, lineHeight: 1.5 }}>
+          This card isn't in your collection yet.<br />Add it to your collection too?
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button onClick={onNo} style={{ ...btnStyle("rgba(255,255,255,0.08)", "#aaa"), padding: "10px 20px" }}>Deck only</button>
+          <button onClick={onYes} style={{ ...btnStyle("#c8a84b", "#1a1200"), padding: "10px 20px" }}>+ Add to both</button>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ─── Collection Tab ───────────────────────────────────────────────────────────
-function CollectionTab({ collection, onRemove, onQty }) {
+function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   const [search, setSearch] = useState("");
   const [filterColor, setFilterColor] = useState("all");
   const [filterType, setFilterType] = useState("");
@@ -588,27 +738,32 @@ function CollectionTab({ collection, onRemove, onQty }) {
       </div>
       {collection.length === 0
         ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
-        : <div style={{ display: "grid", gap: 4 }}>{cards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} />)}</div>
+        : <div style={{ display: "grid", gap: 4 }}>{cards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} />)}</div>
       }
     </div>
   );
 }
 
-function CollectionRow({ card, onRemove, onQty }) {
+function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck }) {
   const [expanded, setExpanded] = useState(false);
+  const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const img = getImage(card);
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+  const decksWithCard = decks ? decks.filter(d => d.cards.some(c => c.collectionId === card.id)).length : 0;
   return (
-    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, overflow: "hidden", borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}` }}>
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`, position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer" }}
-        onClick={() => setExpanded(!expanded)}
-        onMouseEnter={e => handleMouseEnter(card, e)}
-        onMouseMove={e => handleMouseMove(card, e)}
-        onMouseLeave={handleMouseLeave}>
-        {img && <img src={img} style={{ width: 40, borderRadius: 4 }} alt="" />}
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
-          <div style={{ fontSize: 12, color: "#666" }}>{card.type_line} · {card.set_name}</div>
+        onClick={() => setExpanded(!expanded)}>
+        {/* Image + name: tooltip fires here only, not on buttons */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}
+          onMouseEnter={e => { if (!e.target.closest("button")) handleMouseEnter(card, e); }}
+          onMouseMove={e => { if (!e.target.closest("button")) handleMouseMove(card, e); else handleMouseLeave(); }}
+          onMouseLeave={handleMouseLeave}>
+          {img && <img src={img} style={{ width: 40, borderRadius: 4 }} alt="" />}
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
+            <div style={{ fontSize: 12, color: "#666" }}>{card.type_line} · {card.set_name}</div>
+          </div>
         </div>
         <div className="coll-row-meta" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {card.colors?.map(c => <ColorPip key={c} c={c} />)}
@@ -620,6 +775,30 @@ function CollectionRow({ card, onRemove, onQty }) {
           <span style={{ minWidth: 24, textAlign: "center", fontSize: 14 }}>{card.qty || 1}</span>
           <button onClick={e => { e.stopPropagation(); onQty(card.id, 1); }} style={qtyBtn}>+</button>
         </div>
+        {/* Deck selector button */}
+        {decks && decks.length > 0 && (
+          <div style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => setDeckSelectorOpen(o => !o)}
+              title={`In ${decksWithCard} deck${decksWithCard !== 1 ? 's' : ''}`}
+              style={{
+                ...qtyBtn, width: "auto", padding: "0 8px", fontSize: 13,
+                color: decksWithCard > 0 ? "#c084fc" : "#666",
+                borderColor: decksWithCard > 0 ? "rgba(168,85,247,0.4)" : "rgba(255,255,255,0.1)"
+              }}>
+              🃏{decksWithCard > 0 ? ` ${decksWithCard}` : ""}
+            </button>
+            {deckSelectorOpen && (
+              <DeckSelector
+                card={card}
+                decks={decks}
+                onToggle={(deckId) => onToggleDeck(card, deckId)}
+                onClose={() => setDeckSelectorOpen(false)}
+                alignRight
+              />
+            )}
+          </div>
+        )}
         <div className="coll-row-subtotal" style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card) * (card.qty || 1)).toFixed(2)}</div>
         <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>
       </div>
