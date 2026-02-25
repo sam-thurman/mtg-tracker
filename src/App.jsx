@@ -143,7 +143,8 @@ function tcgLink(card) {
 }
 
 function ckLink(card) {
-  return card.purchase_uris?.cardkingdom || `https://www.cardkingdom.com/catalog/search?search=${encodeURIComponent(card.name)}`;
+  const name = card.name?.split(" // ")[0] ?? card.name; // use front face name for DFCs
+  return `https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=${encodeURIComponent(name)}`;
 }
 
 // ─── Serialisation: card ↔ sheet row ─────────────────────────────────────────
@@ -699,6 +700,7 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   const [filterType, setFilterType] = useState("");
   const [filterMV, setFilterMV] = useState("");
   const [sortBy, setSortBy] = useState("name");
+  const [viewMode, setViewMode] = useState("all"); // "all" | "unique"
 
   let cards = [...collection];
   if (search) { const q = search.toLowerCase(); cards = cards.filter(c => c.name.toLowerCase().includes(q) || (c.oracle_text || "").toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q)); }
@@ -709,6 +711,23 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   if (sortBy === "price") cards.sort((a, b) => getPrice(b) - getPrice(a));
   if (sortBy === "color") cards.sort((a, b) => (a.colors?.[0] || "Z").localeCompare(b.colors?.[0] || "Z"));
   if (sortBy === "mv") cards.sort((a, b) => (a.cmc || 0) - (b.cmc || 0));
+
+  // Unique names mode: collapse editions into a single row per card name
+  let displayCards = cards;
+  if (viewMode === "unique") {
+    const byName = new Map();
+    cards.forEach(c => {
+      if (!byName.has(c.name)) {
+        byName.set(c.name, { ...c, _totalQty: c.qty || 1, _editions: 1, _editionCards: [c] });
+      } else {
+        const existing = byName.get(c.name);
+        existing._totalQty += (c.qty || 1);
+        existing._editions += 1;
+        existing._editionCards.push(c);
+      }
+    });
+    displayCards = [...byName.values()].map(c => ({ ...c, qty: c._totalQty }));
+  }
 
   const totalValue = collection.reduce((s, c) => s + getPrice(c) * (c.qty || 1), 0);
 
@@ -735,21 +754,33 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
           <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
           <option value="color">Sort: Color</option><option value="mv">Sort: Mana Value</option>
         </select>
+        {/* View mode toggle */}
+        <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", marginLeft: "auto", flexShrink: 0 }}>
+          {[{ id: "all", label: "All Editions" }, { id: "unique", label: "Unique Names" }].map(v => (
+            <button key={v.id} onClick={() => setViewMode(v.id)} style={{
+              padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+              background: viewMode === v.id ? "rgba(200,168,75,0.2)" : "rgba(255,255,255,0.03)",
+              color: viewMode === v.id ? "#c8a84b" : "#666",
+              fontWeight: viewMode === v.id ? "bold" : "normal",
+            }}>{v.label}</button>
+          ))}
+        </div>
       </div>
       {collection.length === 0
         ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
-        : <div style={{ display: "grid", gap: 4 }}>{cards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} />)}</div>
+        : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} />)}</div>
       }
     </div>
   );
 }
 
-function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck }) {
+function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly }) {
   const [expanded, setExpanded] = useState(false);
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const img = getImage(card);
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
   const decksWithCard = decks ? decks.filter(d => d.cards.some(c => c.collectionId === card.id)).length : 0;
+  const editions = card._editions || 1;
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`, position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer" }}
@@ -762,7 +793,12 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck }) {
           {img && <img src={img} style={{ width: 40, borderRadius: 4 }} alt="" />}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
-            <div style={{ fontSize: 12, color: "#666" }}>{card.type_line} · {card.set_name}</div>
+            <div style={{ fontSize: 12, color: "#666" }}>
+              {card.type_line}
+              {readOnly && editions > 1
+                ? <span style={{ marginLeft: 6, fontSize: 11, color: "#a855f7", background: "rgba(168,85,247,0.12)", padding: "1px 6px", borderRadius: 3 }}>{editions} editions</span>
+                : <span> · {card.set_name}</span>}
+            </div>
           </div>
         </div>
         <div className="coll-row-meta" style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -771,9 +807,15 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck }) {
         </div>
         <div style={{ color: "#c8a84b", fontWeight: "bold", minWidth: 60, textAlign: "right" }}>{getPriceLabel(card)}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button onClick={e => { e.stopPropagation(); onQty(card.id, -1); }} style={qtyBtn}>−</button>
-          <span style={{ minWidth: 24, textAlign: "center", fontSize: 14 }}>{card.qty || 1}</span>
-          <button onClick={e => { e.stopPropagation(); onQty(card.id, 1); }} style={qtyBtn}>+</button>
+          {readOnly ? (
+            <span style={{ minWidth: 40, textAlign: "center", fontSize: 14, color: "#e8e0d0" }}>{card.qty || 1}×</span>
+          ) : (
+            <>
+              <button onClick={e => { e.stopPropagation(); onQty(card.id, -1); }} style={qtyBtn}>−</button>
+              <span style={{ minWidth: 24, textAlign: "center", fontSize: 14 }}>{card.qty || 1}</span>
+              <button onClick={e => { e.stopPropagation(); onQty(card.id, 1); }} style={qtyBtn}>+</button>
+            </>
+          )}
         </div>
         {/* Deck selector button */}
         {decks && decks.length > 0 && (
@@ -800,16 +842,50 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck }) {
           </div>
         )}
         <div className="coll-row-subtotal" style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card) * (card.qty || 1)).toFixed(2)}</div>
-        <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>
+        {!readOnly && <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>}
       </div>
       {expanded && (
-        <div style={{ padding: "0 14px 14px 66px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-          <div style={{ paddingTop: 10, fontSize: 13, color: "#d0c8b8", whiteSpace: "pre-wrap", fontStyle: "italic", lineHeight: 1.6 }}>{getOracleText(card)}</div>
-          {card.flavor_text && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginTop: 6 }}>"{card.flavor_text}"</div>}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
-            <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
-          </div>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+          {readOnly && card._editionCards?.length > 0 ? (
+            // Two-column layout: editions list left, oracle text right
+            <div style={{ display: "flex", gap: 0 }}>
+              {/* Editions panel */}
+              <div style={{ minWidth: 220, maxWidth: 260, padding: "10px 14px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
+                <div style={{ fontSize: 10, letterSpacing: 1, color: "#666", marginBottom: 8 }}>OWNED EDITIONS</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {card._editionCards.map(ed => (
+                    <div key={ed.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: 5 }}>
+                      {getImage(ed) && <img src={getImage(ed)} style={{ width: 28, borderRadius: 3, flexShrink: 0 }} alt="" />}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: "#e8e0d0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ed.set_name}</div>
+                        <div style={{ fontSize: 10, color: "#666" }}>#{ed.collector_number}</div>
+                      </div>
+                      <span style={{ fontSize: 12, color: "#c8a84b", flexShrink: 0 }}>{ed.qty || 1}×</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Oracle text */}
+              <div style={{ flex: 1, padding: "10px 14px" }}>
+                <div style={{ fontSize: 13, color: "#d0c8b8", whiteSpace: "pre-wrap", fontStyle: "italic", lineHeight: 1.6 }}>{getOracleText(card)}</div>
+                {card.flavor_text && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginTop: 6 }}>"{card.flavor_text}"</div>}
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
+                  <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
+                </div>
+              </div>
+            </div>
+          ) : (
+            // Normal single-column expanded view
+            <div style={{ padding: "0 14px 14px 66px" }}>
+              <div style={{ paddingTop: 10, fontSize: 13, color: "#d0c8b8", whiteSpace: "pre-wrap", fontStyle: "italic", lineHeight: 1.6 }}>{getOracleText(card)}</div>
+              {card.flavor_text && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginTop: 6 }}>"{card.flavor_text}"</div>}
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
+                <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
+              </div>
+            </div>
+          )}
         </div>
       )}
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
