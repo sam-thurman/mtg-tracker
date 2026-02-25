@@ -168,14 +168,14 @@ function rowToCard(row) {
   } catch { return null; }
 }
 
-// Decks sheet columns: id | name | cards_json
+// Decks sheet columns: id | name | cards_json | format | commander
 function deckToRow(deck) {
-  return [deck.id, deck.name, JSON.stringify(deck.cards)];
+  return [deck.id, deck.name, JSON.stringify(deck.cards), deck.format || "", deck.commander || ""];
 }
 
 function rowToDeck(row) {
   try {
-    return { id: row[0], name: row[1], cards: JSON.parse(row[2] || "[]") };
+    return { id: row[0], name: row[1], cards: JSON.parse(row[2] || "[]"), format: row[3] || "Standard", commander: row[4] || "" };
   } catch { return null; }
 }
 
@@ -224,7 +224,7 @@ export default function App() {
     try {
       const [collRows, deckRows] = await Promise.all([
         sheetsGet("Collection!A2:H1000"),
-        sheetsGet("Decks!A2:C1000"),
+        sheetsGet("Decks!A2:E1000"),
       ]);
       const cards = collRows.map(rowToCard).filter(Boolean);
       const dks = deckRows.map(rowToDeck).filter(Boolean);
@@ -255,7 +255,7 @@ export default function App() {
           await sheetsUpdate("Collection!A2", col.map(cardToRow), token);
         }
         // Write decks
-        await sheetsClear("Decks!A2:C1000", token);
+        await sheetsClear("Decks!A2:E1000", token);
         if (dks.length > 0) {
           await sheetsUpdate("Decks!A2", dks.map(deckToRow), token);
         }
@@ -645,7 +645,7 @@ function DecksTab({ decks, setDecks, collection }) {
 
   const createDeck = () => {
     if (!newDeckName.trim()) return;
-    const deck = { id: Date.now().toString(), name: newDeckName.trim(), cards: [] };
+    const deck = { id: Date.now().toString(), name: newDeckName.trim(), cards: [], format: "Standard", commander: "" };
     setDecks(d => [...d, deck]);
     setNewDeckName("");
     setActiveDeck(deck.id);
@@ -669,7 +669,19 @@ function DecksTab({ decks, setDecks, collection }) {
             const deckTotal = dk.cards.reduce((s, c) => { const col = collection.find(col => col.id === c.collectionId); return s + (col ? getPrice(col) * c.qty : 0); }, 0);
             return (
               <div key={dk.id} onClick={() => setActiveDeck(dk.id)} style={{ padding: "10px 12px", borderRadius: 8, cursor: "pointer", background: activeDeck === dk.id ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${activeDeck === dk.id ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, position: "relative" }}>
-                <div style={{ fontWeight: "bold", fontSize: 14 }}>{dk.name}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <div style={{ fontWeight: "bold", fontSize: 14 }}>{dk.name}</div>
+                  <span style={{
+                    fontSize: 9, fontWeight: "bold", letterSpacing: 1, padding: "1px 5px", borderRadius: 3,
+                    background: dk.format === "Commander" ? "rgba(138,43,226,0.25)" : "rgba(200,168,75,0.15)",
+                    color: dk.format === "Commander" ? "#c084fc" : "#c8a84b",
+                    border: dk.format === "Commander" ? "1px solid rgba(138,43,226,0.4)" : "1px solid rgba(200,168,75,0.3)"
+                  }}>{dk.format || "Standard"}</span>
+                </div>
+                {dk.format === "Commander" && dk.commander && (() => {
+                  const cmdCard = collection.find(c => c.id === dk.commander);
+                  return cmdCard ? <div style={{ fontSize: 11, color: "#a855f7", marginBottom: 2 }}>⚔ {cmdCard.name}</div> : null;
+                })()}
                 <div style={{ fontSize: 12, color: "#888" }}>{dk.cards.reduce((s, c) => s + c.qty, 0)} cards · ${deckTotal.toFixed(2)}</div>
                 <button onClick={e => { e.stopPropagation(); deleteDeck(dk.id); }} style={{ position: "absolute", top: 6, right: 8, background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
               </div>
@@ -683,6 +695,7 @@ function DecksTab({ decks, setDecks, collection }) {
         <DeckEditor
           deck={currentDeck}
           collection={collection}
+          onUpdate={updater => updateDeck(currentDeck.id, updater)}
           onAdd={cardId => updateDeck(currentDeck.id, dk => {
             const existing = dk.cards.find(c => c.collectionId === cardId);
             return existing
@@ -744,7 +757,7 @@ function CardTooltip({ card, x, y }) {
   );
 }
 
-function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
+function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
   const [search, setSearch] = useState("");
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
   const deckCards = deck.cards.map(c => ({ ...collection.find(col => col.id === c.collectionId), deckQty: c.qty })).filter(c => c.id);
@@ -754,33 +767,96 @@ function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
   deckCards.forEach(c => { const t = (c.type_line || "").split("—")[0].trim().split(" ").pop(); typeCounts[t] = (typeCounts[t] || 0) + (c.deckQty || 0); });
   const available = collection.filter(c => { const q = search.toLowerCase(); return !q || c.name.toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q); });
 
+  // Commander: cards in deck that are Legendary Creatures
+  const legendaryCreatures = deckCards.filter(c => (c.type_line || "").includes("Legendary") && (c.type_line || "").includes("Creature"));
+  const commanderCard = deck.commander ? collection.find(c => c.id === deck.commander) : null;
+
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
+      {/* Deck header: name + stats + format picker */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, color: "#c8a84b", fontStyle: "italic" }}>{deck.name}</h2>
         <div style={{ fontSize: 13, color: "#888" }}>{totalCards} cards · ${totalValue.toFixed(2)}</div>
         <div style={{ fontSize: 12, color: "#666" }}>{Object.entries(typeCounts).map(([t, n]) => `${t}(${n})`).join(" · ")}</div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>FORMAT</span>
+          {["Standard", "Commander"].map(fmt => (
+            <button key={fmt} onClick={() => onUpdate(dk => ({ ...dk, format: fmt, commander: fmt === "Standard" ? "" : dk.commander }))}
+              style={{
+                padding: "5px 12px", borderRadius: 6, border: "1px solid", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold", letterSpacing: 0.5,
+                background: deck.format === fmt ? (fmt === "Commander" ? "rgba(138,43,226,0.25)" : "rgba(200,168,75,0.2)") : "rgba(255,255,255,0.04)",
+                color: deck.format === fmt ? (fmt === "Commander" ? "#c084fc" : "#c8a84b") : "#666",
+                borderColor: deck.format === fmt ? (fmt === "Commander" ? "rgba(138,43,226,0.5)" : "rgba(200,168,75,0.45)") : "rgba(255,255,255,0.1)",
+              }}>{fmt}</button>
+          ))}
+        </div>
       </div>
+
+      {/* Commander selector — only shown for Commander format */}
+      {deck.format === "Commander" && (
+        <div style={{ marginBottom: 16, padding: "12px 16px", background: "rgba(138,43,226,0.08)", border: "1px solid rgba(138,43,226,0.25)", borderRadius: 10 }}>
+          <div style={{ fontSize: 11, letterSpacing: 1, color: "#a855f7", marginBottom: 8 }}>COMMANDER</div>
+          {commanderCard ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {getImage(commanderCard) && <img src={getImage(commanderCard)} style={{ width: 36, borderRadius: 4 }} alt="" />}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: "bold", fontSize: 14, color: "#e8e0d0" }}>{commanderCard.name}</div>
+                <div style={{ fontSize: 11, color: "#a855f7" }}>{commanderCard.type_line}</div>
+              </div>
+              <button onClick={() => onUpdate(dk => ({ ...dk, commander: "" }))} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
+            </div>
+          ) : (
+            legendaryCreatures.length > 0 ? (
+              <div>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Select a Legendary Creature from your deck:</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {legendaryCreatures.map(card => (
+                    <button key={card.id} onClick={() => onUpdate(dk => ({ ...dk, commander: card.id }))}
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "rgba(138,43,226,0.1)", border: "1px solid rgba(138,43,226,0.2)", borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
+                      {getImage(card) && <img src={getImage(card)} style={{ width: 28, borderRadius: 3 }} alt="" />}
+                      <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
+                      <div style={{ fontSize: 11, color: "#888" }}>{card.type_line?.split("—")[0].trim()}</div>
+                      <span style={{ fontSize: 12, color: "#a855f7" }}>→ Set as Commander</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: "#666", fontStyle: "italic" }}>Add a Legendary Creature to your deck to set as Commander.</div>
+            )
+          )}
+        </div>
+      )}
       <div className="deck-editor-grid">
         <div>
           <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
           {deckCards.length === 0
             ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              {deckCards.map(card => (
-                <div key={card.id}
-                  onMouseEnter={e => handleMouseEnter(card, e)}
-                  onMouseMove={e => handleMouseMove(card, e)}
-                  onMouseLeave={handleMouseLeave}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 6, borderLeft: `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`, cursor: "default" }}>
-                  <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
-                  <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
-                  <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
-                  <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
-                  <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
-                  <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
-                </div>
-              ))}
+              {deckCards.map(card => {
+                const isCommander = deck.format === "Commander" && card.id === deck.commander;
+                return (
+                  <div key={card.id}
+                    onMouseEnter={e => handleMouseEnter(card, e)}
+                    onMouseMove={e => handleMouseMove(card, e)}
+                    onMouseLeave={handleMouseLeave}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
+                      background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
+                      borderRadius: 6,
+                      borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
+                      cursor: "default"
+                    }}>
+                    {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
+                    <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
+                    <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
+                    <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
+                    <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
+                    <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
+                    <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                  </div>
+                );
+              })}
             </div>
           }
         </div>
