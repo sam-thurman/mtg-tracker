@@ -375,6 +375,7 @@ function SearchTab({ onAdd, collection }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [cameraError, setCameraError] = useState("");
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
 
   const search = async () => {
     if (!query.trim()) return;
@@ -469,9 +470,11 @@ function SearchTab({ onAdd, collection }) {
           <div style={{ fontSize: 12, color: "#888", marginBottom: 8, letterSpacing: 1 }}>SELECT VERSION — {results.length} printings found</div>
           <div style={{ display: "grid", gap: 4, maxHeight: 320, overflowY: "auto" }}>
             {results.map(card => (
-              <button key={card.id} onClick={() => setSelected(card)} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "10px 14px", cursor: "pointer", color: "#e8e0d0", display: "flex", alignItems: "center", gap: 12, textAlign: "left", fontFamily: "inherit" }}
-                onMouseEnter={e => e.currentTarget.style.background = "rgba(200,168,75,0.1)"}
-                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}>
+              <button key={card.id} onClick={() => setSelected(card)}
+                onMouseEnter={e => handleMouseEnter(card, e)}
+                onMouseMove={e => handleMouseMove(card, e)}
+                onMouseLeave={handleMouseLeave}
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "10px 14px", cursor: "pointer", color: "#e8e0d0", display: "flex", alignItems: "center", gap: 12, textAlign: "left", fontFamily: "inherit" }}>
                 <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3 }} alt="" />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
@@ -485,6 +488,7 @@ function SearchTab({ onAdd, collection }) {
       )}
 
       {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} />}
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
 }
@@ -593,9 +597,14 @@ function CollectionTab({ collection, onRemove, onQty }) {
 function CollectionRow({ card, onRemove, onQty }) {
   const [expanded, setExpanded] = useState(false);
   const img = getImage(card);
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, overflow: "hidden", borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer" }} onClick={() => setExpanded(!expanded)}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer" }}
+        onClick={() => setExpanded(!expanded)}
+        onMouseEnter={e => handleMouseEnter(card, e)}
+        onMouseMove={e => handleMouseMove(card, e)}
+        onMouseLeave={handleMouseLeave}>
         {img && <img src={img} style={{ width: 40, borderRadius: 4 }} alt="" />}
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
@@ -624,6 +633,7 @@ function CollectionRow({ card, onRemove, onQty }) {
           </div>
         </div>
       )}
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
 }
@@ -694,8 +704,49 @@ function DecksTab({ decks, setDecks, collection }) {
   );
 }
 
+// ─── Shared card-hover tooltip hook ─────────────────────────────────────────
+function useCardTooltip() {
+  const [tooltip, setTooltip] = useState(null);
+  const timer = useRef(null);
+  const handleMouseEnter = (card, e) => {
+    clearTimeout(timer.current);
+    const { clientX: x, clientY: y } = e;
+    timer.current = setTimeout(() => setTooltip({ card, x, y }), 500);
+  };
+  const handleMouseMove = (card, e) => {
+    setTooltip(t => (t && t.card.id === card.id) ? { ...t, x: e.clientX, y: e.clientY } : t);
+  };
+  const handleMouseLeave = () => { clearTimeout(timer.current); setTooltip(null); };
+  return { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave };
+}
+
+// ─── Card Hover Tooltip ──────────────────────────────────────────────────────
+function CardTooltip({ card, x, y }) {
+  if (!card) return null;
+  const img = getImage(card);
+  if (!img) return null;
+  // Flip to left side if near right edge
+  const flipLeft = x > window.innerWidth - 290;
+  return (
+    <div style={{
+      position: "fixed",
+      top: Math.min(y - 20, window.innerHeight - 420),
+      left: flipLeft ? x - 270 : x + 16,
+      zIndex: 2000,
+      width: 260,
+      borderRadius: 12,
+      boxShadow: "0 12px 40px rgba(0,0,0,0.85)",
+      pointerEvents: "none",
+      animation: "tooltipFadeIn 0.12s ease",
+    }}>
+      <img src={img} alt={card.name} style={{ width: "100%", borderRadius: 12, display: "block" }} />
+    </div>
+  );
+}
+
 function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
   const [search, setSearch] = useState("");
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
   const deckCards = deck.cards.map(c => ({ ...collection.find(col => col.id === c.collectionId), deckQty: c.qty })).filter(c => c.id);
   const totalCards = deck.cards.reduce((s, c) => s + c.qty, 0);
   const totalValue = deckCards.reduce((s, c) => s + getPrice(c) * (c.deckQty || 0), 0);
@@ -717,7 +768,11 @@ function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
             ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
               {deckCards.map(card => (
-                <div key={card.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 6, borderLeft: `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}` }}>
+                <div key={card.id}
+                  onMouseEnter={e => handleMouseEnter(card, e)}
+                  onMouseMove={e => handleMouseMove(card, e)}
+                  onMouseLeave={handleMouseLeave}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(255,255,255,0.03)", borderRadius: 6, borderLeft: `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`, cursor: "default" }}>
                   <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
                   <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
                   <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
@@ -736,7 +791,11 @@ function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
             {available.map(card => {
               const inDeck = deck.cards.find(c => c.collectionId === card.id);
               return (
-                <button key={card.id} onClick={() => onAdd(card.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
+                <button key={card.id} onClick={() => onAdd(card.id)}
+                  onMouseEnter={e => handleMouseEnter(card, e)}
+                  onMouseMove={e => handleMouseMove(card, e)}
+                  onMouseLeave={handleMouseLeave}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
                   <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
                   <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
                   {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
@@ -747,6 +806,7 @@ function DeckEditor({ deck, collection, onAdd, onRemove, onQty }) {
           </div>
         </div>
       </div>
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
 }

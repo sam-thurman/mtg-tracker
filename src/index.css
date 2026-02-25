@@ -18,6 +18,7 @@ a {
   color: #646cff;
   text-decoration: inherit;
 }
+
 a:hover {
   color: #535bf2;
 }
@@ -45,12 +46,27 @@ button {
   cursor: pointer;
   transition: border-color 0.25s;
 }
+
 button:hover {
   border-color: #646cff;
 }
+
 button:focus,
 button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
+}
+
+/* ── Tooltip fade-in animation ──────────────────────────────────── */
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ── Responsive layout helpers ─────────────────────────────────── */
@@ -64,6 +80,7 @@ button:focus-visible {
   gap: 10px;
   padding: 14px 20px;
 }
+
 .app-header-right {
   display: flex;
   align-items: center;
@@ -87,6 +104,7 @@ button:focus-visible {
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
+
 .search-bar-row input {
   flex: 1;
   min-width: 0;
@@ -97,10 +115,12 @@ button:focus-visible {
   display: grid;
   grid-template-columns: auto 1fr;
 }
+
 @media (max-width: 600px) {
   .card-detail-grid {
     grid-template-columns: 1fr;
   }
+
   .card-detail-img-col {
     display: flex;
     flex-direction: row !important;
@@ -108,9 +128,11 @@ button:focus-visible {
     gap: 12px;
     padding: 14px 14px 0 !important;
   }
+
   .card-detail-img-col img {
     width: 110px !important;
   }
+
   .card-detail-info-col {
     padding: 10px 14px 14px !important;
   }
@@ -123,6 +145,7 @@ button:focus-visible {
   gap: 20px;
   align-items: start;
 }
+
 @media (max-width: 640px) {
   .decks-grid {
     grid-template-columns: 1fr;
@@ -135,6 +158,7 @@ button:focus-visible {
   grid-template-columns: 1fr 1fr;
   gap: 16px;
 }
+
 @media (max-width: 600px) {
   .deck-editor-grid {
     grid-template-columns: 1fr;
@@ -146,6 +170,7 @@ button:focus-visible {
   .coll-row-meta {
     display: none;
   }
+
   .coll-row-subtotal {
     display: none;
   }
@@ -156,9 +181,11 @@ button:focus-visible {
     color: #213547;
     background-color: #ffffff;
   }
+
   a:hover {
     color: #747bff;
   }
+
   button {
     background-color: #f9f9f9;
   }
