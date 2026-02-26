@@ -1402,7 +1402,7 @@ const CSB_BASE = "/api/spellbook";
 
 async function fetchCombosForCard(cardName) {
   const q = encodeURIComponent(`card="${cardName}"`);
-  const r = await fetch(`${CSB_BASE}/?q=${q}`);
+  const r = await fetch(`${CSB_BASE}?q=${q}`);
   if (!r.ok) {
     const text = await r.text().catch(() => "Unknown error");
     throw new Error(`API error (${r.status}): ${text.substring(0, 100)}`);
