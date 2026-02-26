@@ -1398,7 +1398,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
 }
 
 // ─── Deck Combo Finder ──────────────────────────────────────────────────────
-const CSB_BASE = "/api/spellbook/variants/";
+const CSB_BASE = "/csb-api/variants/";
 
 async function fetchCombosForCard(cardName) {
   const q = encodeURIComponent(`card="${cardName}"`);

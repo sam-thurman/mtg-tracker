@@ -1,7 +1,7 @@
 {
     "rewrites": [
         {
-            "source": "/api/spellbook/:path*",
+            "source": "/csb-api/:path*",
             "destination": "https://backend.commanderspellbook.com/:path*"
         }
     ]

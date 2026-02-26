@@ -6,10 +6,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api/spellbook': {
+      '/csb-api': {
         target: 'https://backend.commanderspellbook.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/spellbook/, ''),
+        rewrite: (path) => path.replace(/^\/csb-api/, ''),
       },
     },
   },
