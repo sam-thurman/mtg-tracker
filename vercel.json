@@ -2,7 +2,7 @@
     "rewrites": [
         {
             "source": "/api/spellbook",
-            "destination": "https://backend.commanderspellbook.com/variants"
+            "destination": "https://backend.commanderspellbook.com/variants/"
         }
     ]
 }

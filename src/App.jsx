@@ -1402,7 +1402,7 @@ const CSB_BASE = "/api/spellbook";
 
 async function fetchCombosForCard(cardName) {
   const q = encodeURIComponent(`card="${cardName}"`);
-  const url = `${CSB_BASE}?q=${q}`;
+  const url = `${CSB_BASE}/?q=${q}`;
   console.log(`[Combos] Fetching: ${url}`);
   const r = await fetch(url);
   if (!r.ok) {
@@ -1429,9 +1429,14 @@ function DeckCombos({ deckCards, collection }) {
     setErrorMsg("");
     setCombos([]);
     try {
-      // Fetch combos for each unique card name (cap at 40 to avoid API abuse)
+      // Fetch combos (cap at 40 to avoid API abuse). Fetch SEQUENTIALLY to be proxy-friendly.
       const names = [...new Set(deckCards.map(c => c.name).filter(Boolean))].slice(0, 40);
-      const results = await Promise.all(names.map(fetchCombosForCard));
+      const results = [];
+      for (const name of names) {
+        const res = await fetchCombosForCard(name);
+        results.push(res);
+        await new Promise(resolve => setTimeout(resolve, 50)); // small breathing room
+      }
       // Deduplicate by variant id
       const seen = new Set();
       const all = [];
