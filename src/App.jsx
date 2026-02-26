@@ -107,6 +107,29 @@ function requestToken(onTokenReady) {
 // ─── Scryfall API helpers ─────────────────────────────────────────────────────
 const SF = "https://api.scryfall.com";
 
+// Batch-fetch color_identity from Scryfall for arbitrary card names (independent of collection)
+// Uses POST /cards/collection, max 75 per request
+async function fetchColorIdentities(names) {
+  const unique = [...new Set(names.filter(Boolean))];
+  const map = {};
+  for (let i = 0; i < unique.length; i += 75) {
+    const batch = unique.slice(i, i + 75);
+    try {
+      const res = await fetch(`${SF}/cards/collection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifiers: batch.map(name => ({ name })) }),
+      });
+      if (!res.ok) continue;
+      const json = await res.json();
+      (json.data || []).forEach(card => {
+        map[card.name.toLowerCase()] = card.color_identity || [];
+      });
+    } catch { /* best-effort */ }
+  }
+  return map;
+}
+
 async function searchCards(name) {
   const r = await fetch(`${SF}/cards/search?q=${encodeURIComponent(name)}&unique=prints&order=released`);
   if (!r.ok) return [];
@@ -232,6 +255,12 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | loading | saving | error | unconfigured
   const [syncMsg, setSyncMsg] = useState("");
   const saveTimeout = useRef(null);
+  const [theme, setTheme] = useState(() => localStorage.getItem("mtg-theme") || "dark");
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("mtg-theme", theme);
+  }, [theme]);
 
   const isConfigured = SHEETS_CONFIG.spreadsheetId !== "YOUR_SPREADSHEET_ID_HERE"
     && SHEETS_CONFIG.apiKey !== "YOUR_API_KEY_HERE"
@@ -347,11 +376,11 @@ export default function App() {
   const totalValue = collection.reduce((sum, c) => sum + getPrice(c) * (c.qty || 1), 0);
 
   return (
-    <div style={{ minHeight: "100vh", background: "#0d0d0f", fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: "#e8e0d0" }}>
+    <div style={{ minHeight: "100vh", background: "var(--bg)", fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: "var(--text)" }}>
       {/* Header */}
       <header className="app-header" style={{
-        background: "linear-gradient(135deg, #1a0a00 0%, #0d0d0f 50%, #001a0d 100%)",
-        borderBottom: "1px solid rgba(180,140,60,0.3)"
+        background: "var(--bg-header)",
+        borderBottom: "1px solid var(--border-gold)"
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 28 }}>⚔️</span>
@@ -362,8 +391,17 @@ export default function App() {
         </div>
 
         <div className="app-header-right">
+          {/* Theme toggle */}
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme(t => t === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+          >
+            {theme === "dark" ? "☀️" : "🌙"}
+          </button>
+
           {/* Sync status */}
-          <div style={{ fontSize: 12, color: syncStatus === "error" ? "#e57373" : syncStatus === "saving" ? "#ffb74d" : syncStatus === "unconfigured" ? "#888" : "#81c784", display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ fontSize: 12, color: syncStatus === "error" ? "#e57373" : syncStatus === "saving" ? "#ffb74d" : syncStatus === "unconfigured" ? "var(--text-muted)" : "#81c784", display: "flex", alignItems: "center", gap: 6 }}>
             <span>{syncStatus === "loading" ? "⟳" : syncStatus === "saving" ? "↑" : syncStatus === "error" ? "⚠" : syncStatus === "unconfigured" ? "⚙" : "✓"}</span>
             <span>{syncMsg || (syncStatus === "unconfigured" ? "Configure Google Sheets in code" : "Ready")}</span>
             {syncStatus === "idle" && isConfigured && (
@@ -387,7 +425,7 @@ export default function App() {
       )}
 
       {/* Nav */}
-      <nav style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.02)" }}>
+      <nav style={{ display: "flex", borderBottom: "1px solid var(--border)", background: "var(--surface)" }}>
         {[{ id: "search", label: "🔍 Search & Add" }, { id: "collection", label: "📚 Collection" }, { id: "decks", label: "🃏 Decks" }].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             flex: 1, padding: "14px 8px", border: "none", cursor: "pointer",
@@ -492,7 +530,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
     <div>
       <div className="search-bar-row">
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()}
-          placeholder="Search card name..." style={{ padding: "12px 16px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "#e8e0d0", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
+          placeholder="Search card name..." style={{ padding: "12px 16px", background: "var(--input-bg)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "var(--text)", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
         <button onClick={search} style={btnStyle("#c8a84b", "#1a1200")}>Search</button>
         <button onClick={cameraMode ? stopCamera : startCamera} style={btnStyle("#4a8a6a", "#001a0d")}>{cameraMode ? "✕ Cancel" : "📷 Scan"}</button>
       </div>
@@ -517,7 +555,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
                 onMouseEnter={e => handleMouseEnter(card, e)}
                 onMouseMove={e => handleMouseMove(card, e)}
                 onMouseLeave={handleMouseLeave}
-                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "10px 14px", cursor: "pointer", color: "#e8e0d0", display: "flex", alignItems: "center", gap: 12, textAlign: "left", fontFamily: "inherit" }}>
+                style={{ background: "var(--card-row-bg)", border: "1px solid var(--border)", borderRadius: 6, padding: "10px 14px", cursor: "pointer", color: "var(--text)", display: "flex", alignItems: "center", gap: 12, textAlign: "left", fontFamily: "inherit" }}>
                 <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3 }} alt="" />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
@@ -589,7 +627,7 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
         </div>
         <div className="card-detail-info-col" style={{ padding: "20px 20px 20px 0" }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
-            <h2 style={{ margin: 0, fontSize: 22, color: "#e8e0d0", fontStyle: "italic" }}>{card.name}</h2>
+            <h2 style={{ margin: 0, fontSize: 22, color: "var(--text)", fontStyle: "italic" }}>{card.name}</h2>
             <div style={{ fontSize: 24, color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card)}</div>
           </div>
           <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>{card.set_name} · {card.set?.toUpperCase()} #{card.collector_number}</div>
@@ -701,7 +739,7 @@ function AddToCollectionPrompt({ cardName, onYes, onNo }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ background: "#1a1a20", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 14, padding: "28px 32px", maxWidth: 360, textAlign: "center", boxShadow: "0 12px 40px rgba(0,0,0,0.8)" }}>
         <div style={{ fontSize: 28, marginBottom: 10 }}>📚</div>
-        <div style={{ fontSize: 16, fontWeight: "bold", color: "#e8e0d0", marginBottom: 8 }}>{cardName}</div>
+        <div style={{ fontSize: 16, fontWeight: "bold", color: "var(--text)", marginBottom: 8 }}>{cardName}</div>
         <div style={{ fontSize: 14, color: "#888", marginBottom: 24, lineHeight: 1.5 }}>
           This card isn't in your collection yet.<br />Add it to your collection too?
         </div>
@@ -1015,7 +1053,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
         <div style={{ color: "#c8a84b", fontWeight: "bold", minWidth: 60, textAlign: "right" }}>{getPriceLabel(card)}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           {readOnly ? (
-            <span style={{ minWidth: 40, textAlign: "center", fontSize: 14, color: "#e8e0d0" }}>{card.qty || 1}×</span>
+            <span style={{ minWidth: 40, textAlign: "center", fontSize: 14, color: "var(--text)" }}>{card.qty || 1}×</span>
           ) : (
             <>
               <button onClick={e => { e.stopPropagation(); onQty(card.id, -1); }} style={qtyBtn}>−</button>
@@ -1064,7 +1102,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
                     <div key={ed.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: 5 }}>
                       {getImage(ed) && <img src={getImage(ed)} style={{ width: 28, borderRadius: 3, flexShrink: 0 }} alt="" />}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, color: "#e8e0d0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ed.set_name}</div>
+                        <div style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ed.set_name}</div>
                         <div style={{ fontSize: 10, color: "#666" }}>#{ed.collector_number}</div>
                       </div>
                       <span style={{ fontSize: 12, color: "#c8a84b", flexShrink: 0 }}>{ed.qty || 1}×</span>
@@ -1104,6 +1142,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
 function DecksTab({ decks, setDecks, collection }) {
   const [activeDeck, setActiveDeck] = useState(null);
   const [newDeckName, setNewDeckName] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null); // { id, name }
 
   const createDeck = () => {
     if (!newDeckName.trim()) return;
@@ -1145,7 +1184,7 @@ function DecksTab({ decks, setDecks, collection }) {
                   return cmdCard ? <div style={{ fontSize: 11, color: "#a855f7", marginBottom: 2 }}>⚔ {cmdCard.name}</div> : null;
                 })()}
                 <div style={{ fontSize: 12, color: "#888" }}>{dk.cards.reduce((s, c) => s + c.qty, 0)} cards · ${deckTotal.toFixed(2)}</div>
-                <button onClick={e => { e.stopPropagation(); deleteDeck(dk.id); }} style={{ position: "absolute", top: 6, right: 8, background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
+                <button onClick={e => { e.stopPropagation(); setConfirmDelete({ id: dk.id, name: dk.name }); }} style={{ position: "absolute", top: 6, right: 8, background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
               </div>
             );
           })}
@@ -1173,6 +1212,55 @@ function DecksTab({ decks, setDecks, collection }) {
         <div style={{ textAlign: "center", padding: 60, color: "#555" }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🃏</div>
           <div>Select or create a deck</div>
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 500,
+          background: "rgba(0,0,0,0.7)",
+          display: "flex", alignItems: "center", justifyContent: "center"
+        }} onClick={() => setConfirmDelete(null)}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: "var(--bg)", border: "1px solid rgba(200,168,75,0.3)",
+              borderRadius: 14, padding: "32px 36px", maxWidth: 360, width: "90%",
+              textAlign: "center", boxShadow: "0 16px 48px rgba(0,0,0,0.8)"
+            }}
+          >
+            <div style={{ fontSize: 36, marginBottom: 12 }}>&#x1F5D1;</div>
+            <div style={{ fontSize: 17, fontWeight: "bold", color: "var(--text)", marginBottom: 8 }}>
+              Delete &ldquo;{confirmDelete.name}&rdquo;?
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 28, lineHeight: 1.5 }}>
+              This will permanently remove the deck and all its card assignments.
+              Your actual card collection will not be affected.
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{
+                  padding: "9px 22px", borderRadius: 8, border: "1px solid var(--border)",
+                  background: "var(--surface-mid)", color: "var(--text-muted)",
+                  cursor: "pointer", fontFamily: "inherit", fontSize: 14
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { deleteDeck(confirmDelete.id); setConfirmDelete(null); }}
+                style={{
+                  padding: "9px 22px", borderRadius: 8, border: "1px solid rgba(229,115,115,0.4)",
+                  background: "rgba(229,115,115,0.15)", color: "#ef9a9a",
+                  cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: "bold"
+                }}
+              >
+                Delete Deck
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -1225,6 +1313,20 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
   const deckCards = deck.cards.map(c => ({ ...collection.find(col => col.id === c.collectionId), deckQty: c.qty })).filter(c => c.id);
   const totalCards = deck.cards.reduce((s, c) => s + c.qty, 0);
+  // Commander card — needed early for color identity computation
+  const commanderCard = deck.commander ? collection.find(c => c.id === deck.commander) : null;
+  // Color identity:
+  //   Commander format → use ONLY the commander's color_identity
+  //   Standard format  → union of all deck card color_identity arrays
+  const deckColorIdentity = (() => {
+    const s = new Set();
+    if (deck.format === "Commander" && commanderCard) {
+      (commanderCard.color_identity || []).forEach(ci => s.add(ci));
+    } else {
+      deckCards.forEach(c => (c.color_identity || []).forEach(ci => s.add(ci)));
+    }
+    return s;
+  })();
   const totalValue = deckCards.reduce((s, c) => s + getPrice(c) * (c.deckQty || 0), 0);
   const typeCounts = {};
   deckCards.forEach(c => {
@@ -1253,7 +1355,6 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
 
   // Commander: cards in deck that are Legendary Creatures
   const legendaryCreatures = deckCards.filter(c => (c.type_line || "").includes("Legendary") && (c.type_line || "").includes("Creature"));
-  const commanderCard = deck.commander ? collection.find(c => c.id === deck.commander) : null;
 
   return (
     <div>
@@ -1294,7 +1395,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {getImage(commanderCard) && <img src={getImage(commanderCard)} style={{ width: 36, borderRadius: 4 }} alt="" />}
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: "bold", fontSize: 14, color: "#e8e0d0" }}>{commanderCard.name}</div>
+                <div style={{ fontWeight: "bold", fontSize: 14, color: "var(--text)" }}>{commanderCard.name}</div>
                 <div style={{ fontSize: 11, color: "#a855f7" }}>{commanderCard.type_line}</div>
               </div>
               <button onClick={() => onUpdate(dk => ({ ...dk, commander: "" }))} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
@@ -1306,7 +1407,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {legendaryCreatures.map(card => (
                     <button key={card.id} onClick={() => onUpdate(dk => ({ ...dk, commander: card.id }))}
-                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "rgba(138,43,226,0.1)", border: "1px solid rgba(138,43,226,0.2)", borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
+                      style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", background: "rgba(138,43,226,0.1)", border: "1px solid rgba(138,43,226,0.2)", borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left" }}>
                       {getImage(card) && <img src={getImage(card)} style={{ width: 28, borderRadius: 3 }} alt="" />}
                       <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
                       <div style={{ fontSize: 11, color: "#888" }}>{card.type_line?.split("—")[0].trim()}</div>
@@ -1349,8 +1450,8 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
                               cursor: "default",
                               position: "relative"
                             }}>
-                            {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
-                            <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
+                            {isCommander && <span style={{ fontSize: 12, color: "#a855f7", marginRight: 2 }} title="Commander">★</span>}
+                            <div style={{ flex: 1, fontSize: 13, color: "var(--text)" }}>{card.name}</div>
                             <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
                             <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
                             <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
@@ -1376,7 +1477,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
                     onMouseEnter={e => handleMouseEnter(card, e)}
                     onMouseMove={e => handleMouseMove(card, e)}
                     onMouseLeave={handleMouseLeave}
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, borderRadius: 6, cursor: "pointer", color: "#e8e0d0", fontFamily: "inherit", textAlign: "left" }}>
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "var(--card-row-bg)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "var(--border)"}`, borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left" }}>
                     <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
                     <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
                     {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
@@ -1388,9 +1489,9 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
           </div>
         </div>
       ) : viewMode === "synergies" ? (
-        <CommanderSynergies commanderCard={commanderCard} deckCards={deckCards} collection={collection} />
+        <CommanderSynergies commanderCard={commanderCard} deckCards={deckCards} collection={collection} deckColorIdentity={deckColorIdentity} />
       ) : (
-        <DeckCombos deckCards={deckCards} collection={collection} />
+        <DeckCombos deckCards={deckCards} collection={collection} deckColorIdentity={deckColorIdentity} commanderName={commanderCard?.name || ""} isCommander={deck.format === "Commander"} />
       )}
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
@@ -1400,26 +1501,53 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
 // ─── Deck Combo Finder ──────────────────────────────────────────────────────
 const CSB_BASE = "/api/spellbook";
 
-async function fetchCombosForCard(cardName) {
-  const q = encodeURIComponent(`card="${cardName}"`);
-  const url = `${CSB_BASE}?q=${q}`;
-  console.log(`[Combos] Fetching: ${url}`);
-  const r = await fetch(url);
-  if (!r.ok) {
-    const text = await r.text().catch(() => "Unknown error");
-    throw new Error(`API error (${r.status}): ${text.substring(0, 100)}`);
+// Concurrency-limited runner: runs async tasks N at a time
+async function pool(tasks, concurrency) {
+  const results = new Array(tasks.length);
+  let index = 0;
+  async function runner() {
+    while (index < tasks.length) {
+      const i = index++;
+      results[i] = await tasks[i]();
+    }
   }
-  const d = await r.json();
-  return d.results || [];
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, runner));
+  return results;
 }
 
-function DeckCombos({ deckCards, collection }) {
+// Fetch all combos for a single card name with optional color identity pre-filter
+// Correct Spellbook syntax: coloridentity<=bg (lowercase, no colon/space before <=)
+async function fetchCombosForCard(cardName, ciFilter = "") {
+  const qStr = ciFilter ? `card="${cardName}" coloridentity<=${ciFilter}` : `card="${cardName}"`;
+  const q = encodeURIComponent(qStr);
+  const results = [];
+  let url = `${CSB_BASE}?q=${q}`;
+  while (url) {
+    const r = await fetch(url);
+    if (!r.ok) {
+      const text = await r.text().catch(() => "Unknown error");
+      throw new Error(`API error (${r.status}): ${text.substring(0, 100)}`);
+    }
+    const d = await r.json();
+    results.push(...(d.results || []));
+    // Follow pagination via d.next — strip domain, rewrite to our proxy path
+    if (d.next) {
+      try { const nextUrl = new URL(d.next); url = `${CSB_BASE}${nextUrl.search}`; }
+      catch { url = null; }
+    } else { url = null; }
+  }
+  return results;
+}
+
+function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, commanderName = "", isCommander = false }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [errorMsg, setErrorMsg] = useState("");
   const [combos, setCombos] = useState([]);
   const [expanded, setExpanded] = useState({}); // variantId -> bool
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
 
+  const [colorOnly, setColorOnly] = useState(true);
+  const [effectiveDeckCI, setEffectiveDeckCI] = useState(propDeckCI);
   const deckNames = new Set(deckCards.map(c => c.name?.toLowerCase()));
   const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
 
@@ -1429,18 +1557,30 @@ function DeckCombos({ deckCards, collection }) {
     setErrorMsg("");
     setCombos([]);
     try {
-      // Fetch combos (cap at 40 to avoid API abuse). Fetch SEQUENTIALLY to be proxy-friendly.
-      const names = [...new Set(deckCards.map(c => c.name).filter(Boolean))].slice(0, 40);
-      const results = [];
-      for (const name of names) {
-        const res = await fetchCombosForCard(name);
-        results.push(res);
-        await new Promise(resolve => setTimeout(resolve, 50)); // small breathing room
-      }
+      // Fetch Spellbook combos AND Scryfall deck color identities in parallel (no extra latency)
+      const names = [...new Set(deckCards.map(c => c.name).filter(Boolean))].slice(0, 60);
+      // Resolve deck color identity from Scryfall — reliable regardless of Sheets data format
+      // Commander format: look up ONLY the commander's CI (avoids off-color cards in the deck)
+      // Standard format: union of all deck card CIs from Scryfall
+      const ciLookupNames = isCommander && commanderName ? [commanderName] : names;
+      const deckCiMap = await fetchColorIdentities(ciLookupNames);
+      const resolvedCI = (() => {
+        // Start from prop if already has data (fast path); merge Scryfall to fill any gaps
+        const s = new Set(propDeckCI.size > 0 && !(isCommander) ? propDeckCI : []);
+        Object.values(deckCiMap).forEach(ci => ci.forEach(c => s.add(c)));
+        return s;
+      })();
+      console.log("[Combos] resolvedCI:", [...resolvedCI], "ciFilter will be:", [...resolvedCI].map(c => c.toLowerCase()).sort().join(""));
+      // coloridentity<=bg tells Spellbook to only return combos legal for the deck's colors
+      const ciFilter = colorOnly && resolvedCI.size > 0
+        ? [...resolvedCI].map(c => c.toLowerCase()).sort().join("")
+        : "";
+      console.log("[Combos] resolvedCI:", [...resolvedCI], "ciFilter:", ciFilter);
+      const batchResults = await pool(names.map(name => () => fetchCombosForCard(name, ciFilter)), 3);
       // Deduplicate by variant id
       const seen = new Set();
       const all = [];
-      results.flat().forEach(v => { if (!seen.has(v.id)) { seen.add(v.id); all.push(v); } });
+      batchResults.flat().forEach(v => { if (!seen.has(v.id)) { seen.add(v.id); all.push(v); } });
       // Score: how many cards in this combo are owned in the deck
       const scored = all.map(v => {
         const comboNames = v.uses.map(u => u.card.name.toLowerCase());
@@ -1451,6 +1591,8 @@ function DeckCombos({ deckCards, collection }) {
       scored.sort((a, b) =>
         b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity
       );
+      // No per-combo Scryfall lookup needed — Spellbook returns variant.identity (e.g. "BG")
+      setEffectiveDeckCI(resolvedCI);
       setCombos(scored);
       setStatus("done");
     } catch (e) {
@@ -1480,8 +1622,15 @@ function DeckCombos({ deckCards, collection }) {
     </div>
   );
 
-  const fullCombos = combos.filter(c => c._owned === c._total);
-  const partialCombos = combos.filter(c => c._owned > 0 && c._owned < c._total);
+  // Color identity filter: variant.identity is a string like "BG" from the Spellbook API
+  // (variant.colorIdentity is always [] — the actual field is "identity")
+  const isColorLegal = (variant) => {
+    if (!colorOnly || effectiveDeckCI.size === 0) return true;
+    return [...(variant.identity || "")].every(c => effectiveDeckCI.has(c.toUpperCase()));
+  };
+  const filteredCombos = combos.filter(isColorLegal);
+  const fullCombos = filteredCombos.filter(c => c._owned === c._total);
+  const partialCombos = filteredCombos.filter(c => c._owned > 0 && c._owned < c._total);
 
   return (
     <div>
@@ -1491,6 +1640,17 @@ function DeckCombos({ deckCards, collection }) {
           <span style={{ color: "#4ade80", marginLeft: 6 }}>{fullCombos.length} complete</span>
           <span style={{ color: "#c8a84b", marginLeft: 6 }}>{partialCombos.length} partial</span>
         </div>
+        {effectiveDeckCI && effectiveDeckCI.size > 0 && (
+          <button onClick={() => setColorOnly(v => !v)} style={{
+            background: colorOnly ? "rgba(200,168,75,0.15)" : "none",
+            border: `1px solid ${colorOnly ? "rgba(200,168,75,0.5)" : "rgba(255,255,255,0.1)"}`,
+            borderRadius: 6, color: colorOnly ? "#c8a84b" : "#888",
+            cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit",
+            display: "flex", alignItems: "center", gap: 5
+          }}>
+            {colorOnly ? "🎨 Color Legal" : "🎨 All Colors"}
+          </button>
+        )}
         <button onClick={() => setStatus("idle")} style={{ marginLeft: "auto", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit" }}>↺ Rescan</button>
       </div>
 
@@ -1604,11 +1764,13 @@ const EDHREC_CATEGORIES = [
   { tag: "utilitylands", label: "Utility Lands", accent: "#a16207" },
 ];
 
-function CommanderSynergies({ commanderCard, deckCards, collection }) {
+function CommanderSynergies({ commanderCard, deckCards, collection, deckColorIdentity }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
   const [data, setData] = useState(null);
   const [openCats, setOpenCats] = useState({ highsynergycards: true, newcards: true, topcards: true });
   const [filter, setFilter] = useState("");
+  const [colorOnly, setColorOnly] = useState(true);
+  const [colorIdentityMap, setColorIdentityMap] = useState({}); // cardName.lower -> color_identity[]
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
 
   const deckNames = new Set(deckCards.map(c => c.name?.toLowerCase()));
@@ -1622,6 +1784,12 @@ function CommanderSynergies({ commanderCard, deckCards, collection }) {
       const res = await fetch(`https://json.edhrec.com/pages/commanders/${slug}.json`);
       if (!res.ok) throw new Error(res.status);
       const json = await res.json();
+      // Batch-fetch color identities for all EDHREC cards from Scryfall BEFORE rendering
+      const allCardlists = json?.container?.json_dict?.cardlists || [];
+      const allNames = [...new Set(allCardlists.flatMap(cl => (cl.cardviews || []).map(cv => cv.name)))];
+      const ciMap = await fetchColorIdentities(allNames);
+      // React 18 batches these together — commits in a single render with filter already applied
+      setColorIdentityMap(ciMap);
       setData(json);
       setStatus("done");
     } catch (e) {
@@ -1640,7 +1808,7 @@ function CommanderSynergies({ commanderCard, deckCards, collection }) {
     <div style={{ textAlign: "center", padding: "40px 20px" }}>
       <div style={{ fontSize: 32, marginBottom: 12 }}>🧬</div>
       <div style={{ color: "#888", fontSize: 14, marginBottom: 6 }}>Load EDHREC recommendations for</div>
-      <div style={{ fontWeight: "bold", fontSize: 16, color: "#e8e0d0", marginBottom: 20 }}>{commanderCard.name}</div>
+      <div style={{ fontWeight: "bold", fontSize: 16, color: "var(--text)", marginBottom: 20 }}>{commanderCard.name}</div>
       <button onClick={load} style={btnStyle("#a855f7", "#fff")}>Load Synergies</button>
     </div>
   );
@@ -1671,6 +1839,17 @@ function CommanderSynergies({ commanderCard, deckCards, collection }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, color: "#888" }}>EDHREC data for <span style={{ color: "#a855f7", fontWeight: "bold" }}>{commanderCard.name}</span> · ~{edhrecNum.toLocaleString()} decks</div>
         <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter cards..." style={{ ...filterInputStyle, marginLeft: "auto", width: 180 }} />
+        {deckColorIdentity && deckColorIdentity.size > 0 && (
+          <button onClick={() => setColorOnly(v => !v)} style={{
+            background: colorOnly ? "rgba(200,168,75,0.15)" : "none",
+            border: `1px solid ${colorOnly ? "rgba(200,168,75,0.5)" : "rgba(255,255,255,0.1)"}`,
+            borderRadius: 6, color: colorOnly ? "#c8a84b" : "#888",
+            cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit",
+            display: "flex", alignItems: "center", gap: 5
+          }}>
+            {colorOnly ? "🎨 Color Legal" : "🎨 All Colors"}
+          </button>
+        )}
         <button onClick={() => setStatus("idle")} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit" }}>↺ Reload</button>
       </div>
       {/* Column legend */}
@@ -1680,7 +1859,14 @@ function CommanderSynergies({ commanderCard, deckCards, collection }) {
       </div>
 
       {EDHREC_CATEGORIES.map(cat => {
-        const cards = (byTag[cat.tag] || []).filter(c => !q || c.name.toLowerCase().includes(q));
+        const cards = (byTag[cat.tag] || []).filter(c => {
+          if (q && !c.name.toLowerCase().includes(q)) return false;
+          if (colorOnly && deckColorIdentity && deckColorIdentity.size > 0) {
+            const ci = colorIdentityMap[c.name.toLowerCase()];
+            if (ci && !ci.every(x => deckColorIdentity.has(x))) return false;
+          }
+          return true;
+        });
         if (cards.length === 0) return null;
         const isOpen = openCats[cat.tag];
         const ownedCount = cards.filter(c => collectionNames.has(c.name.toLowerCase())).length;
@@ -1749,5 +1935,5 @@ function btnStyle(bg, textColor) {
 function linkStyle(bg) {
   return { display: "inline-block", padding: "6px 14px", background: bg, color: "#fff", borderRadius: 6, textDecoration: "none", fontSize: 12, fontWeight: "bold", letterSpacing: 0.5 };
 }
-const filterInputStyle = { padding: "8px 12px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 6, color: "#e8e0d0", fontSize: 13, fontFamily: "inherit", outline: "none" };
-const qtyBtn = { background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "#e8e0d0", cursor: "pointer", width: 22, height: 22, padding: 0, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" };
+const filterInputStyle = { padding: "8px 12px", background: "var(--input-bg)", border: "1px solid var(--input-border)", borderRadius: 6, color: "var(--text)", fontSize: 13, fontFamily: "inherit", outline: "none" };
+const qtyBtn = { background: "var(--surface-mid)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)", cursor: "pointer", width: 22, height: 22, padding: 0, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center" };

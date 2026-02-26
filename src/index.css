@@ -1,17 +1,56 @@
+/* ── Theme variables (dark by default) ──────────────────────────────────── */
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --bg: #0d0d0f;
+  --bg-header: linear-gradient(135deg, #1a0a00 0%, #0d0d0f 50%, #001a0d 100%);
+  --surface: rgba(255, 255, 255, 0.03);
+  --surface-mid: rgba(255, 255, 255, 0.06);
+  --text: #e8e0d0;
+  --text-muted: #888;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-gold: rgba(200, 168, 75, 0.3);
+  --accent: #c8a84b;
+  --accent-bg: rgba(200, 168, 75, 0.12);
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.12);
+  --card-row-bg: rgba(255, 255, 255, 0.03);
+  --card-row-hover: rgba(255, 255, 255, 0.06);
+  --toggle-icon: "🌙";
+
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
+  color-scheme: dark;
+  color: var(--text);
+  background-color: var(--bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ── Light theme overrides ───────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg: #f5f0e8;
+  --bg-header: linear-gradient(135deg, #3d1f00 0%, #2a1500 50%, #002d14 100%);
+  --surface: rgba(0, 0, 0, 0.04);
+  --surface-mid: rgba(0, 0, 0, 0.07);
+  --text: #2a1e10;
+  --text-muted: #6b5c44;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-gold: rgba(160, 120, 40, 0.4);
+  --accent: #a07828;
+  --accent-bg: rgba(160, 120, 40, 0.1);
+  --input-bg: rgba(255, 255, 255, 0.7);
+  --input-border: rgba(0, 0, 0, 0.2);
+  --card-row-bg: rgba(255, 255, 255, 0.6);
+  --card-row-hover: rgba(255, 255, 255, 0.85);
+  --toggle-icon: "☀️";
+
+  color-scheme: light;
+  color: var(--text);
+  background-color: var(--bg);
+}
+
 
 a {
   font-weight: 500;
@@ -176,17 +215,23 @@ button:focus-visible {
   }
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
 
-  a:hover {
-    color: #747bff;
-  }
+/* ── Theme toggle button ─────────────────────────────────────────────────── */
+.theme-toggle {
+  background: var(--surface-mid);
+  border: 1px solid var(--border-gold);
+  border-radius: 20px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 15px;
+  color: var(--accent);
+  transition: background 0.2s, transform 0.1s;
+  font-family: inherit;
+  line-height: 1;
+}
 
-  button {
-    background-color: #f9f9f9;
-  }
+.theme-toggle:hover {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  transform: scale(1.05);
 }
