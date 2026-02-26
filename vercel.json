@@ -1,0 +1,12 @@
+{
+    "rewrites": [
+        {
+            "source": "/api/spellbook/(.*)",
+            "destination": "https://backend.commanderspellbook.com/variants/$1"
+        },
+        {
+            "source": "/api/spellbook",
+            "destination": "https://backend.commanderspellbook.com/variants/"
+        }
+    ]
+}
