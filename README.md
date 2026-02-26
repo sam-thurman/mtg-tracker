@@ -25,20 +25,28 @@ A personal Magic: The Gathering collection tracker that stores your cards and de
 - Card image hover tooltip on the name/art area
 
 ### 🃏 Decks
-- Create and delete decks; **Format selector** — Standard or Commander
-- **Commander selection** — designate any Legendary Creature in the deck as commander; highlighted in sidebar and card table
-- Deck editor with card list — add from collection, adjust quantities, remove cards
+- Create decks (Enter to confirm) and delete with a **confirmation prompt**
+- **Format selector** — Standard or Commander
+- **Commander selection** — designate any Legendary Creature in the deck as commander; highlighted with a ★ indicator in the card list
+- Deck editor with card list grouped by type — add from collection, adjust quantities, remove cards
 - Per-deck total value and card count
 
 #### ⚡ Combos tab *(in Deck Editor)*
-- Queries [Commander Spellbook](https://commanderspellbook.com) for combos involving cards in the deck
+- Queries [Commander Spellbook](https://commanderspellbook.com) for combos involving cards in the deck via a Vercel serverless proxy (avoids browser CORS restrictions)
+- **🎨 Color Legal toggle** — defaults on; filters to combos within the commander's color identity (Commander) or deck's color identity (Standard), applied server-side and client-side
 - Ranks combos by completeness: **purple** = in deck, **green** = in collection, **grey** = need to buy
 - Expand any combo for prerequisites, steps, and produces; hover card pills to preview images
 
 #### 🧬 Commander Synergies tab *(Commander decks only)*
 - Fetches EDHREC recommendations for the selected commander
 - Grouped by category (High Synergy, Creatures, Instants, etc.) with synergy % and inclusion %
+- **🎨 Color Legal toggle** — filters recommendations to cards within the commander's color identity
 - **✓ green** = in collection, **⧓ purple** = in deck; filter across all categories at once
+
+### 🌙 Light / Dark Mode
+- Toggle between dark (default) and light theme via the ☀️/🌙 button in the header
+- Preference persists across sessions via `localStorage`
+- Full CSS variable theming — all UI elements respond to the active theme
 
 ---
 

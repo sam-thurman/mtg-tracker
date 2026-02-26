@@ -1570,12 +1570,12 @@ function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, comm
         Object.values(deckCiMap).forEach(ci => ci.forEach(c => s.add(c)));
         return s;
       })();
-      console.log("[Combos] resolvedCI:", [...resolvedCI], "ciFilter will be:", [...resolvedCI].map(c => c.toLowerCase()).sort().join(""));
+
       // coloridentity<=bg tells Spellbook to only return combos legal for the deck's colors
       const ciFilter = colorOnly && resolvedCI.size > 0
         ? [...resolvedCI].map(c => c.toLowerCase()).sort().join("")
         : "";
-      console.log("[Combos] resolvedCI:", [...resolvedCI], "ciFilter:", ciFilter);
+
       const batchResults = await pool(names.map(name => () => fetchCombosForCard(name, ciFilter)), 3);
       // Deduplicate by variant id
       const seen = new Set();
