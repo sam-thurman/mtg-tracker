@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/spellbook': {
-        target: 'https://backend.commanderspellbook.com/variants',
+        target: 'https://backend.commanderspellbook.com',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/spellbook/, ''),
       },
