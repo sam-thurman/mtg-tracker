@@ -1403,13 +1403,17 @@ const CSB_BASE = "/api/spellbook";
 async function fetchCombosForCard(cardName) {
   const q = encodeURIComponent(`card="${cardName}"`);
   const r = await fetch(`${CSB_BASE}/?q=${q}`);
-  if (!r.ok) return [];
+  if (!r.ok) {
+    const text = await r.text().catch(() => "Unknown error");
+    throw new Error(`API error (${r.status}): ${text.substring(0, 100)}`);
+  }
   const d = await r.json();
   return d.results || [];
 }
 
 function DeckCombos({ deckCards, collection }) {
   const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [errorMsg, setErrorMsg] = useState("");
   const [combos, setCombos] = useState([]);
   const [expanded, setExpanded] = useState({}); // variantId -> bool
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
@@ -1420,6 +1424,7 @@ function DeckCombos({ deckCards, collection }) {
   const findCombos = async () => {
     if (deckCards.length === 0) return;
     setStatus("loading");
+    setErrorMsg("");
     setCombos([]);
     try {
       // Fetch combos for each unique card name (cap at 40 to avoid API abuse)
@@ -1442,6 +1447,8 @@ function DeckCombos({ deckCards, collection }) {
       setCombos(scored);
       setStatus("done");
     } catch (e) {
+      console.error("Combo fetch error:", e);
+      setErrorMsg(e.message);
       setStatus("error");
     }
   };
@@ -1460,8 +1467,9 @@ function DeckCombos({ deckCards, collection }) {
 
   if (status === "error") return (
     <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
-      Failed to fetch combos.
-      <button onClick={() => setStatus("idle")} style={{ marginLeft: 12, background: "none", border: "none", color: "#888", cursor: "pointer" }}>Try again</button>
+      <div>Failed to fetch combos.</div>
+      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>{errorMsg}</div>
+      <button onClick={() => setStatus("idle")} style={{ marginTop: 12, background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", padding: "4px 12px", fontSize: 13 }}>Try again</button>
     </div>
   );
 
