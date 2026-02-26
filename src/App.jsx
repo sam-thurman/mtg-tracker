@@ -513,7 +513,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
           <div style={{ fontSize: 12, color: "#888", marginBottom: 8, letterSpacing: 1 }}>SELECT VERSION — {results.length} printings found</div>
           <div style={{ display: "grid", gap: 4, maxHeight: 320, overflowY: "auto" }}>
             {results.map(card => (
-              <button key={card.id} onClick={() => setSelected(card)}
+              <button key={card.id} onClick={() => { setSelected(card); handleMouseLeave(); }}
                 onMouseEnter={e => handleMouseEnter(card, e)}
                 onMouseMove={e => handleMouseMove(card, e)}
                 onMouseLeave={handleMouseLeave}
@@ -572,7 +572,7 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
     onToggleDeck({ id: card.id }, deckId);
   };
   return (
-    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 12, overflow: "hidden" }}>
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 12 }}>
       <div style={{ padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <button onClick={onBack} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>← Back to results</button>
       </div>
@@ -1346,7 +1346,8 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
                               background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
                               borderRadius: 6,
                               borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
-                              cursor: "default"
+                              cursor: "default",
+                              position: "relative"
                             }}>
                             {isCommander && <span style={{ fontSize: 11, color: "#a855f7" }} title="Commander">⚔</span>}
                             <div style={{ flex: 1, fontSize: 13, color: isCommander ? "#e8e0d0" : undefined }}>{card.name}</div>
@@ -1397,7 +1398,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
 }
 
 // ─── Deck Combo Finder ──────────────────────────────────────────────────────
-const CSB_BASE = "https://backend.commanderspellbook.com/variants";
+const CSB_BASE = "/api/spellbook";
 
 async function fetchCombosForCard(cardName) {
   const q = encodeURIComponent(`card="${cardName}"`);
