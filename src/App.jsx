@@ -364,11 +364,12 @@ export default function App() {
 
   // Toggle a collection card into/out of a specific deck
   const toggleCardInDeck = useCallback((collectionCard, deckId) => {
+    const editionIds = collectionCard._editionCards ? collectionCard._editionCards.map(e => e.id) : [collectionCard.id];
     setDecks(prev => prev.map(dk => {
       if (dk.id !== deckId) return dk;
-      const exists = dk.cards.some(c => c.collectionId === collectionCard.id);
-      return exists
-        ? { ...dk, cards: dk.cards.filter(c => c.collectionId !== collectionCard.id) }
+      const inDeck = dk.cards.some(c => editionIds.includes(c.collectionId));
+      return inDeck
+        ? { ...dk, cards: dk.cards.filter(c => !editionIds.includes(c.collectionId)) }
         : { ...dk, cards: [...dk.cards, { collectionId: collectionCard.id, qty: 1 }] };
     }));
     setTimeout(triggerSave, 0);
@@ -829,7 +830,8 @@ function DeckSelector({ card, decks, onToggle, onClose, alignRight, anchorEl }) 
       <div style={{ fontSize: 10, letterSpacing: 1, color: "#666", padding: "4px 8px 6px" }}>ADD / REMOVE FROM DECK</div>
       {decks.length === 0 && <div style={{ padding: "8px 10px", fontSize: 13, color: "#555" }}>No decks yet.</div>}
       {decks.map(dk => {
-        const inDeck = dk.cards.some(c => c.collectionId === card.id);
+        const editionIds = card._editionCards ? card._editionCards.map(e => e.id) : [card.id];
+        const inDeck = dk.cards.some(c => editionIds.includes(c.collectionId));
         return (
           <div key={dk.id} onClick={() => onToggle(dk.id)}
             style={{
@@ -1151,7 +1153,8 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const img = getImage(card);
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
-  const decksWithCard = decks ? decks.filter(d => d.cards.some(c => c.collectionId === card.id)).length : 0;
+  const editionIds = card._editionCards ? card._editionCards.map(e => e.id) : [card.id];
+  const decksWithCard = decks ? decks.filter(d => d.cards.some(c => editionIds.includes(c.collectionId))).length : 0;
   const editions = card._editions || 1;
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`, position: "relative" }}>
