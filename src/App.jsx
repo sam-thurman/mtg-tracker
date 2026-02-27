@@ -588,9 +588,6 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
               const hasDeckPopoverOpen = openDeckPopover === card.id;
               return (
                 <div key={card.id}
-                  onMouseEnter={e => handleMouseEnter(card, e)}
-                  onMouseMove={e => handleMouseMove(card, e)}
-                  onMouseLeave={handleMouseLeave}
                   style={{
                     background: "var(--card-row-bg)",
                     border: "1px solid var(--border)",
@@ -606,6 +603,9 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
                   {/* ── Clickable info area: navigates to CardDetail ── */}
                   <button
                     onClick={() => { setSelected(card); handleMouseLeave(); setOpenDeckPopover(null); }}
+                    onMouseEnter={e => handleMouseEnter(card, e)}
+                    onMouseMove={e => handleMouseMove(card, e)}
+                    onMouseLeave={handleMouseLeave}
                     style={{ flex: 1, background: "none", border: "none", cursor: "pointer", color: "var(--text)", display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", textAlign: "left", fontFamily: "inherit", minWidth: 0 }}>
                     <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3, flexShrink: 0 }} alt="" />
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -635,7 +635,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
                       <div style={{ position: "relative" }}>
                         <button
                           id={`deck-btn-${card.id}`}
-                          onClick={() => setOpenDeckPopover(hasDeckPopoverOpen ? null : card.id)}
+                          onClick={() => { setOpenDeckPopover(hasDeckPopoverOpen ? null : card.id); handleMouseLeave(); }}
                           title="Add to a deck"
                           style={{
                             padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.4)",
@@ -666,7 +666,10 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
       )}
 
       {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} />}
-      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+      {/* Suppress tooltip when any modal or popover is active, or a card is selected */}
+      {!selected && !openDeckPopover && !pendingInlineAdd && (
+        <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+      )}
 
       {/* Inline AddToCollectionPrompt for results list */}
       {pendingInlineAdd && (
