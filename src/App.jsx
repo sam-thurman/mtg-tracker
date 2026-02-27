@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 
 // ─── CONFIG — fill these in after following SETUP.md ─────────────────────────
 const SHEETS_CONFIG = {
@@ -526,6 +527,37 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
 
   const inCollection = selected ? collection.some(c => c.id === selected.id) : false;
 
+  // ── Inline-action state for the results list ──────────────────────────────
+  // Which card row has its deck popover open (by card.id), or null
+  const [openDeckPopover, setOpenDeckPopover] = useState(null);
+  // { card, deckId } when user picks a deck for a card not yet in collection
+  const [pendingInlineAdd, setPendingInlineAdd] = useState(null);
+
+  const handleInlineDeckToggle = (card, deckId) => {
+    const collectionCard = collection.find(c => c.id === card.id);
+    if (collectionCard) {
+      // Already in collection — toggle directly
+      onToggleDeck(collectionCard, deckId);
+    } else {
+      const deck = decks?.find(d => d.id === deckId);
+      const alreadyInDeck = deck?.cards.some(c => c.collectionId === card.id);
+      if (alreadyInDeck) {
+        onToggleDeck({ id: card.id }, deckId);
+      } else {
+        // Not in collection and not yet in deck — prompt
+        setPendingInlineAdd({ card, deckId });
+        setOpenDeckPopover(null);
+      }
+    }
+  };
+
+  const handleInlinePendingConfirm = (alsoAddToCollection) => {
+    const { card, deckId } = pendingInlineAdd;
+    setPendingInlineAdd(null);
+    if (alsoAddToCollection) onAdd(card);
+    onToggleDeck({ id: card.id }, deckId);
+  };
+
   return (
     <div>
       <div className="search-bar-row">
@@ -548,32 +580,105 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
 
       {!loading && results.length > 1 && !selected && (
         <div>
-          <div style={{ fontSize: 12, color: "#888", marginBottom: 8, letterSpacing: 1 }}>SELECT VERSION — {results.length} printings found</div>
-          <div style={{ display: "grid", gap: 4, maxHeight: 320, overflowY: "auto" }}>
-            {results.map(card => (
-              <button key={card.id} onClick={() => { setSelected(card); handleMouseLeave(); }}
-                onMouseEnter={e => handleMouseEnter(card, e)}
-                onMouseMove={e => handleMouseMove(card, e)}
-                onMouseLeave={handleMouseLeave}
-                style={{ background: "var(--card-row-bg)", border: "1px solid var(--border)", borderRadius: 6, padding: "10px 14px", cursor: "pointer", color: "var(--text)", display: "flex", alignItems: "center", gap: 12, textAlign: "left", fontFamily: "inherit" }}>
-                <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3 }} alt="" />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
-                  <div style={{ fontSize: 12, color: "#888" }}>{card.set_name} ({card.set?.toUpperCase()}) · {card.collector_number}</div>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 8, letterSpacing: 1 }}>SELECT VERSION — {results.length} printings found · click a card for full details</div>
+          <div style={{ display: "grid", gap: 4, maxHeight: 480, overflowY: "auto" }}>
+            {results.map(card => {
+              const inColl = collection.some(c => c.id === card.id);
+              const collectionCard = collection.find(c => c.id === card.id);
+              const hasDeckPopoverOpen = openDeckPopover === card.id;
+              return (
+                <div key={card.id}
+                  onMouseEnter={e => handleMouseEnter(card, e)}
+                  onMouseMove={e => handleMouseMove(card, e)}
+                  onMouseLeave={handleMouseLeave}
+                  style={{
+                    background: "var(--card-row-bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    overflow: "visible",
+                    position: "relative",
+                    zIndex: hasDeckPopoverOpen ? 10 : 1
+                  }}>
+
+                  {/* ── Clickable info area: navigates to CardDetail ── */}
+                  <button
+                    onClick={() => { setSelected(card); handleMouseLeave(); setOpenDeckPopover(null); }}
+                    style={{ flex: 1, background: "none", border: "none", cursor: "pointer", color: "var(--text)", display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", textAlign: "left", fontFamily: "inherit", minWidth: 0 }}>
+                    <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3, flexShrink: 0 }} alt="" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: "bold", fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{card.name}</div>
+                      <div style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{card.set_name} ({card.set?.toUpperCase()}) · {card.collector_number}</div>
+                    </div>
+                    <div style={{ color: "#c8a84b", fontWeight: "bold", flexShrink: 0, fontSize: 13 }}>{getPriceLabel(card)}</div>
+                  </button>
+
+                  {/* ── Inline action buttons ── */}
+                  <div style={{ display: "flex", gap: 6, paddingRight: 10, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                    {/* Add to Collection */}
+                    <button
+                      onClick={() => onAdd(card)}
+                      title={inColl ? "Add another copy to collection" : "Add to collection"}
+                      style={{
+                        padding: "5px 10px", borderRadius: 6, border: `1px solid ${inColl ? "rgba(74,170,74,0.5)" : "rgba(200,168,75,0.4)"}`,
+                        background: inColl ? "rgba(74,170,74,0.1)" : "rgba(200,168,75,0.08)",
+                        color: inColl ? "#81c784" : "#c8a84b", cursor: "pointer", fontSize: 12,
+                        fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s",
+                      }}>
+                      {inColl ? "✓" : "+"} {inColl ? "In Collection" : "Collection"}
+                    </button>
+
+                    {/* Add to Deck — only if decks exist */}
+                    {decks && decks.length > 0 && (
+                      <div style={{ position: "relative" }}>
+                        <button
+                          id={`deck-btn-${card.id}`}
+                          onClick={() => setOpenDeckPopover(hasDeckPopoverOpen ? null : card.id)}
+                          title="Add to a deck"
+                          style={{
+                            padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(168,85,247,0.4)",
+                            background: hasDeckPopoverOpen ? "rgba(168,85,247,0.15)" : "rgba(168,85,247,0.07)",
+                            color: "#c084fc", cursor: "pointer", fontSize: 12,
+                            fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s",
+                          }}>
+                          🃏 Deck {hasDeckPopoverOpen ? "▲" : "▾"}
+                        </button>
+                        {hasDeckPopoverOpen && (
+                          <DeckSelector
+                            card={collectionCard || card}
+                            decks={decks}
+                            onToggle={(deckId) => handleInlineDeckToggle(card, deckId)}
+                            onClose={() => setOpenDeckPopover(null)}
+                            anchorEl={document.getElementById(`deck-btn-${card.id}`)}
+                            alignRight
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div style={{ color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card)}</div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
       {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} />}
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+
+      {/* Inline AddToCollectionPrompt for results list */}
+      {pendingInlineAdd && (
+        <AddToCollectionPrompt
+          cardName={pendingInlineAdd.card.name}
+          onYes={() => handleInlinePendingConfirm(true)}
+          onNo={() => handleInlinePendingConfirm(false)}
+        />
+      )}
     </div>
   );
 }
-
 function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, collection }) {
   const [showFull, setShowFull] = useState(false);
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
@@ -647,7 +752,9 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
             </button>
             {decks && decks.length > 0 && (
               <div style={{ position: "relative" }}>
-                <button onClick={() => setDeckSelectorOpen(o => !o)}
+                <button
+                  id="detail-deck-btn"
+                  onClick={() => setDeckSelectorOpen(o => !o)}
                   style={{ ...btnStyle("#3b2d6e", "#c084fc"), fontSize: 14, padding: "12px 18px" }}>
                   🃏 Add to Deck ▾
                 </button>
@@ -657,6 +764,7 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
                     decks={decks}
                     onToggle={handleDeckToggle}
                     onClose={() => setDeckSelectorOpen(false)}
+                    anchorEl={document.getElementById("detail-deck-btn")}
                   />
                 )}
               </div>
@@ -685,18 +793,32 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
 // Floating popover: list of decks with checkmarks.
 // card: the collection card (has .id used as collectionId).
 // onToggle(deckId) is called when user clicks a row.
-function DeckSelector({ card, decks, onToggle, onClose, alignRight }) {
+function DeckSelector({ card, decks, onToggle, onClose, alignRight, anchorEl }) {
   const ref = useRef(null);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
+
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target) && !anchorEl?.contains(e.target)) onClose(); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
+  }, [onClose, anchorEl]);
 
-  return (
+  useEffect(() => {
+    if (anchorEl) {
+      const rect = anchorEl.getBoundingClientRect();
+      setCoords({
+        top: rect.bottom + window.scrollY + 6,
+        left: alignRight ? rect.right + window.scrollX - 220 : rect.left + window.scrollX
+      });
+    }
+  }, [anchorEl, alignRight]);
+
+  const content = (
     <div ref={ref} style={{
-      position: "absolute", top: "calc(100% + 6px)",
-      [alignRight ? "right" : "left"]: 0, zIndex: 300,
+      position: "absolute",
+      top: coords.top,
+      left: coords.left,
+      zIndex: 2000,
       background: "#1a1a20", border: "1px solid rgba(168,85,247,0.3)",
       borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.7)",
       minWidth: 220, maxHeight: 320, overflowY: "auto", padding: 6,
@@ -731,6 +853,8 @@ function DeckSelector({ card, decks, onToggle, onClose, alignRight }) {
       })}
     </div>
   );
+
+  return createPortal(content, document.body);
 }
 
 // Modal: "Add this card to your collection too?"
