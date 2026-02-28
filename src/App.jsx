@@ -105,6 +105,55 @@ function requestToken(onTokenReady) {
   redirectToGoogleAuth();
 }
 
+// ─── IndexedDB helpers for CK Pricing ────────────────────────────────────────
+const CK_DB_NAME = "ArcaneLedgerCK";
+const CK_STORE_NAME = "PriceCache";
+
+async function openCKDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CK_DB_NAME, 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(CK_STORE_NAME)) {
+        db.createObjectStore(CK_STORE_NAME);
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function getCKCache() {
+  try {
+    const db = await openCKDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(CK_STORE_NAME, "readonly");
+      const store = tx.objectStore(CK_STORE_NAME);
+      const req = store.get("mapping");
+      req.onsuccess = () => {
+        const mapping = req.result;
+        const timeReq = store.get("lastUpdate");
+        timeReq.onsuccess = () => resolve({ mapping, lastUpdate: timeReq.result });
+      };
+      req.onerror = () => resolve({ mapping: null, lastUpdate: 0 });
+    });
+  } catch { return { mapping: null, lastUpdate: 0 }; }
+}
+
+async function saveCKCache(mapping) {
+  try {
+    const db = await openCKDB();
+    const tx = db.transaction(CK_STORE_NAME, "readwrite");
+    const store = tx.objectStore(CK_STORE_NAME);
+    store.put(mapping, "mapping");
+    store.put(Date.now(), "lastUpdate");
+    return new Promise((resolve) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch { /* best effort */ }
+}
+
 // ─── Scryfall API helpers ─────────────────────────────────────────────────────
 const SF = "https://api.scryfall.com";
 
@@ -138,13 +187,28 @@ async function searchCards(name) {
   return d.data || [];
 }
 
-function getPrice(card) {
+function getPrice(card, source = "tcg", ckPrices = null) {
+  if (source === "ck") {
+    if (!ckPrices) return 0;
+    // Map card.id back to Scryfall ID if it has a suffix
+    let sfId = card.id.replace("-foil", "").replace("-nonfoil", "");
+    const key = card.isFoil ? `${sfId}-foil` : sfId;
+    return parseFloat(ckPrices[key] || 0);
+  }
   const p = card.prices || {};
+  const isFoil = card.isFoil || false;
+  if (isFoil) return parseFloat(p.usd_foil || 0) || 0;
   return parseFloat(p.usd || p.usd_foil || 0) || 0;
 }
 
-function getPriceLabel(card) {
+function getPriceLabel(card, source = "tcg", ckPrices = null) {
+  if (source === "ck") {
+    const price = getPrice(card, "ck", ckPrices);
+    return price > 0 ? `$${price.toFixed(2)}${card.isFoil ? ' (foil)' : ''}` : "N/A";
+  }
   const p = card.prices || {};
+  const isFoil = card.isFoil || false;
+  if (isFoil && p.usd_foil) return `$${parseFloat(p.usd_foil).toFixed(2)} (foil)`;
   if (p.usd) return `$${parseFloat(p.usd).toFixed(2)}`;
   if (p.usd_foil) return `$${parseFloat(p.usd_foil).toFixed(2)} (foil)`;
   return "N/A";
@@ -167,7 +231,8 @@ function tcgLink(card) {
 }
 
 function ckLink(card) {
-  const name = card.name?.split(" // ")[0] ?? card.name; // use front face name for DFCs
+  let name = card.name?.split(" // ")[0] ?? card.name; // use front face name for DFCs
+  if (card.isFoil) name += " Foil";
   return `https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=${encodeURIComponent(name)}`;
 }
 
@@ -257,11 +322,17 @@ export default function App() {
   const [syncMsg, setSyncMsg] = useState("");
   const saveTimeout = useRef(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("mtg-theme") || "dark");
+  const [priceSource, setPriceSource] = useState(() => localStorage.getItem("mtg-price-source") || "tcg");
+  const [ckPrices, setCkPrices] = useState(null);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("mtg-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem("mtg-price-source", priceSource);
+  }, [priceSource]);
 
   const isConfigured = SHEETS_CONFIG.spreadsheetId !== "YOUR_SPREADSHEET_ID_HERE"
     && SHEETS_CONFIG.apiKey !== "YOUR_API_KEY_HERE"
@@ -277,7 +348,40 @@ export default function App() {
       // Load first, then the pending save will fire via triggerSave after state updates
     }
     loadFromSheets();
+    initializeCKPrices();
   }, []);
+
+  const initializeCKPrices = async () => {
+    const { mapping, lastUpdate } = await getCKCache();
+    if (mapping) setCkPrices(mapping);
+
+    // Refresh if older than 24 hours
+    if (!lastUpdate || Date.now() - lastUpdate > 24 * 60 * 60 * 1000) {
+      refreshCKPrices();
+    }
+  };
+
+  const refreshCKPrices = async () => {
+    try {
+      setSyncMsg("Updating CK prices...");
+      const res = await fetch("/api/ck-pricelist");
+      if (!res.ok) throw new Error("CK API failed");
+      const json = await res.json();
+      const mapping = {};
+      (json.data || []).forEach(item => {
+        if (item.scryfall_id) {
+          const key = item.is_foil === 'true' ? `${item.scryfall_id}-foil` : item.scryfall_id;
+          mapping[key] = item.price_retail;
+        }
+      });
+      await saveCKCache(mapping);
+      setCkPrices(mapping);
+      setSyncMsg("CK prices updated");
+      setTimeout(() => setSyncMsg(""), 3000);
+    } catch (e) {
+      console.error("CK Refresh failed", e);
+    }
+  };
 
   const loadFromSheets = async () => {
     setSyncStatus("loading");
@@ -375,7 +479,7 @@ export default function App() {
     setTimeout(triggerSave, 0);
   }, [triggerSave]);
 
-  const totalValue = collection.reduce((sum, c) => sum + getPrice(c) * (c.qty || 1), 0);
+  const totalValue = collection.reduce((sum, c) => sum + getPrice(c, priceSource, ckPrices) * (c.qty || 1), 0);
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", color: "var(--text)" }}>
@@ -401,6 +505,18 @@ export default function App() {
           >
             {theme === "dark" ? "☀️" : "🌙"}
           </button>
+
+          {/* Price source toggle */}
+          <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.03)" }}>
+            {[{ id: "tcg", label: "TCG" }, { id: "ck", label: "CK" }].map(s => (
+              <button key={s.id} onClick={() => setPriceSource(s.id)} style={{
+                padding: "4px 8px", border: "none", cursor: "pointer", fontSize: 10, fontWeight: "bold", fontFamily: "inherit",
+                background: priceSource === s.id ? "rgba(200,168,75,0.2)" : "transparent",
+                color: priceSource === s.id ? "#c8a84b" : "#666",
+                transition: "all 0.2s"
+              }}>{s.label}</button>
+            ))}
+          </div>
 
           {/* Sync status */}
           <div style={{ fontSize: 12, color: syncStatus === "error" ? "#e57373" : syncStatus === "saving" ? "#ffb74d" : syncStatus === "unconfigured" ? "var(--text-muted)" : "#81c784", display: "flex", alignItems: "center", gap: 6 }}>
@@ -440,16 +556,16 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} />}
-        {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} decks={decks} onToggleDeck={toggleCardInDeck} />}
-        {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} />}
+        {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
+        {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
+        {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
       </main>
     </div>
   );
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
+function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPrices }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -465,9 +581,25 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
     setLoading(true);
     setSelected(null);
     const cards = await searchCards(query);
-    setResults(cards);
+    // Expand results to include foil versions if available
+    const expandedResults = [];
+    cards.forEach(card => {
+      const hasNonFoil = card.finishes?.includes("nonfoil");
+      const hasFoil = card.finishes?.includes("foil");
+
+      if (hasNonFoil) {
+        expandedResults.push({ ...card, isFoil: false, id: `${card.id}-nonfoil` });
+      }
+      if (hasFoil) {
+        expandedResults.push({ ...card, isFoil: true, id: `${card.id}-foil` });
+      }
+      if (!hasNonFoil && !hasFoil) {
+        expandedResults.push(card);
+      }
+    });
+    setResults(expandedResults);
     setLoading(false);
-    if (cards.length === 1) setSelected(cards[0]);
+    if (expandedResults.length === 1) setSelected(expandedResults[0]);
   };
 
   const startCamera = async () => {
@@ -526,7 +658,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
     setLoading(false);
   };
 
-  const inCollection = selected ? collection.some(c => c.id === selected.id) : false;
+  const inCollection = selected ? collection.some(c => c.id === (selected.isFoil ? `${selected.id.replace("-foil", "")}-foil` : selected.id)) : false;
 
   // ── Inline-action state for the results list ──────────────────────────────
   // Which card row has its deck popover open (by card.id), or null
@@ -610,10 +742,12 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
                     style={{ flex: 1, background: "none", border: "none", cursor: "pointer", color: "var(--text)", display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", textAlign: "left", fontFamily: "inherit", minWidth: 0 }}>
                     <img src={card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small} style={{ width: 36, borderRadius: 3, flexShrink: 0 }} alt="" />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: "bold", fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{card.name}</div>
+                      <div style={{ fontWeight: "bold", fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {card.name} {card.isFoil && <span style={{ color: "#a855f7", fontSize: 10, verticalAlign: "middle", marginLeft: 4 }}>✦ foil</span>}
+                      </div>
                       <div style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{card.set_name} ({card.set?.toUpperCase()}) · {card.collector_number}</div>
                     </div>
-                    <div style={{ color: "#c8a84b", fontWeight: "bold", flexShrink: 0, fontSize: 13 }}>{getPriceLabel(card)}</div>
+                    <div style={{ color: "#c8a84b", fontWeight: "bold", flexShrink: 0, fontSize: 13 }}>{getPriceLabel(card, priceSource, ckPrices)}</div>
                   </button>
 
                   {/* ── Inline action buttons ── */}
@@ -666,7 +800,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
         </div>
       )}
 
-      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} />}
+      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
       {/* Suppress tooltip when any modal or popover is active, or a card is selected */}
       {!selected && !openDeckPopover && !pendingInlineAdd && (
         <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
@@ -683,7 +817,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck }) {
     </div>
   );
 }
-function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, collection }) {
+function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, collection, priceSource, ckPrices }) {
   const [showFull, setShowFull] = useState(false);
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const [pendingDeckId, setPendingDeckId] = useState(null); // deck awaiting collection prompt
@@ -736,8 +870,10 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
         </div>
         <div className="card-detail-info-col" style={{ padding: "20px 20px 20px 0" }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
-            <h2 style={{ margin: 0, fontSize: 22, color: "var(--text)", fontStyle: "italic" }}>{card.name}</h2>
-            <div style={{ fontSize: 24, color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card)}</div>
+            <h2 style={{ margin: 0, fontSize: 22, color: "var(--text)", fontStyle: "italic" }}>
+              {card.name} {card.isFoil && <span style={{ color: "#a855f7", fontSize: 12, verticalAlign: "middle" }}>✦ foil</span>}
+            </h2>
+            <div style={{ fontSize: 24, color: "#c8a84b", fontWeight: "bold" }}>{getPriceLabel(card, priceSource, ckPrices)}</div>
           </div>
           <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>{card.set_name} · {card.set?.toUpperCase()} #{card.collector_number}</div>
           {card.colors?.length > 0 && <div style={{ marginBottom: 8 }}>{card.colors.map(c => <ColorPip key={c} c={c} />)}</div>}
@@ -882,7 +1018,7 @@ function AddToCollectionPrompt({ cardName, onYes, onNo }) {
 }
 
 // ─── Collection Tab ───────────────────────────────────────────────────────────
-function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
+function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, priceSource, ckPrices }) {
   const [search, setSearch] = useState("");
   const [filterColor, setFilterColor] = useState("all");
   const [filterSupertypes, setFilterSupertypes] = useState(new Set()); // supertype multi-select
@@ -946,7 +1082,7 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
   if (filterSubtype) { const q = filterSubtype.toLowerCase(); cards = cards.filter(c => ((c.type_line || "").split("—")[1] || "").toLowerCase().includes(q)); }
   if (filterMV !== "") cards = cards.filter(c => c.cmc === parseInt(filterMV));
   if (sortBy === "name") cards.sort((a, b) => a.name.localeCompare(b.name));
-  if (sortBy === "price") cards.sort((a, b) => getPrice(b) - getPrice(a));
+  if (sortBy === "price") cards.sort((a, b) => getPrice(b, priceSource, ckPrices) - getPrice(a, priceSource, ckPrices));
   if (sortBy === "color") cards.sort((a, b) => (a.colors?.[0] || "Z").localeCompare(b.colors?.[0] || "Z"));
   if (sortBy === "mv") cards.sort((a, b) => (a.cmc || 0) - (b.cmc || 0));
 
@@ -967,7 +1103,7 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
     displayCards = [...byName.values()].map(c => ({ ...c, qty: c._totalQty }));
   }
 
-  const totalValue = collection.reduce((s, c) => s + getPrice(c) * (c.qty || 1), 0);
+  const totalValue = collection.reduce((s, c) => s + getPrice(c, priceSource, ckPrices) * (c.qty || 1), 0);
 
   return (
     <div>
@@ -1142,13 +1278,13 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck }) {
       </div>
       {collection.length === 0
         ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
-        : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} />)}</div>
+        : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} priceSource={priceSource} ckPrices={ckPrices} />)}</div>
       }
     </div>
   );
 }
 
-function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly }) {
+function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly, priceSource, ckPrices }) {
   const [expanded, setExpanded] = useState(false);
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const img = getImage(card);
@@ -1167,7 +1303,9 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
           onMouseLeave={handleMouseLeave}>
           {img && <img src={img} style={{ width: 40, borderRadius: 4 }} alt="" />}
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: "bold", fontSize: 14 }}>{card.name}</div>
+            <div style={{ fontWeight: "bold", fontSize: 14 }}>
+              {card.name} {card.isFoil && <span style={{ color: "#a855f7", fontSize: 10, verticalAlign: "middle", marginLeft: 4 }}>✦ foil</span>}
+            </div>
             <div style={{ fontSize: 12, color: "#666" }}>
               {card.type_line}
               {readOnly && editions > 1
@@ -1180,7 +1318,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
           {card.colors?.map(c => <ColorPip key={c} c={c} />)}
           <span style={{ fontSize: 12, color: "#888" }}>CMC {card.cmc || 0}</span>
         </div>
-        <div style={{ color: "#c8a84b", fontWeight: "bold", minWidth: 60, textAlign: "right" }}>{getPriceLabel(card)}</div>
+        <div style={{ color: "#c8a84b", fontWeight: "bold", minWidth: 60, textAlign: "right" }}>{getPriceLabel(card, priceSource, ckPrices)}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           {readOnly ? (
             <span style={{ minWidth: 40, textAlign: "center", fontSize: 14, color: "var(--text)" }}>{card.qty || 1}×</span>
@@ -1216,7 +1354,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
             )}
           </div>
         )}
-        <div className="coll-row-subtotal" style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card) * (card.qty || 1)).toFixed(2)}</div>
+        <div className="coll-row-subtotal" style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card, priceSource, ckPrices) * (card.qty || 1)).toFixed(2)}</div>
         {!readOnly && <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>}
       </div>
       {expanded && (
@@ -1232,7 +1370,9 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
                     <div key={ed.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: 5 }}>
                       {getImage(ed) && <img src={getImage(ed)} style={{ width: 28, borderRadius: 3, flexShrink: 0 }} alt="" />}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ed.set_name}</div>
+                        <div style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {ed.set_name} {ed.isFoil && <span style={{ color: "#a855f7", fontSize: 9 }}>✦</span>}
+                        </div>
                         <div style={{ fontSize: 10, color: "#666" }}>#{ed.collector_number}</div>
                       </div>
                       <span style={{ fontSize: 12, color: "#c8a84b", flexShrink: 0 }}>{ed.qty || 1}×</span>
@@ -1269,7 +1409,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly })
 }
 
 // ─── Decks Tab ────────────────────────────────────────────────────────────────
-function DecksTab({ decks, setDecks, collection }) {
+function DecksTab({ decks, setDecks, collection, priceSource, ckPrices }) {
   const [activeDeck, setActiveDeck] = useState(null);
   const [newDeckName, setNewDeckName] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null); // { id, name }
@@ -1297,7 +1437,7 @@ function DecksTab({ decks, setDecks, collection }) {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {decks.map(dk => {
-            const deckTotal = dk.cards.reduce((s, c) => { const col = collection.find(col => col.id === c.collectionId); return s + (col ? getPrice(col) * c.qty : 0); }, 0);
+            const deckTotal = dk.cards.reduce((s, c) => { const col = collection.find(col => col.id === c.collectionId); return s + (col ? getPrice(col, priceSource, ckPrices) * c.qty : 0); }, 0);
             return (
               <div key={dk.id} onClick={() => setActiveDeck(dk.id)} style={{ padding: "10px 12px", borderRadius: 8, cursor: "pointer", background: activeDeck === dk.id ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${activeDeck === dk.id ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
@@ -1337,6 +1477,8 @@ function DecksTab({ decks, setDecks, collection }) {
           onQty={(cardId, delta) => updateDeck(currentDeck.id, dk => ({
             ...dk, cards: dk.cards.map(c => c.collectionId !== cardId ? c : { ...c, qty: Math.max(0, c.qty + delta) }).filter(c => c.qty > 0)
           }))}
+          priceSource={priceSource}
+          ckPrices={ckPrices}
         />
       ) : (
         <div style={{ textAlign: "center", padding: 60, color: "#555" }}>
@@ -1437,7 +1579,7 @@ function CardTooltip({ card, x, y }) {
   );
 }
 
-function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
+function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceSource, ckPrices }) {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState("deck"); // "deck" | "combos"
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
@@ -1457,7 +1599,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
     }
     return s;
   })();
-  const totalValue = deckCards.reduce((s, c) => s + getPrice(c) * (c.deckQty || 0), 0);
+  const totalValue = deckCards.reduce((s, c) => s + getPrice(c, priceSource, ckPrices) * (c.deckQty || 0), 0);
   const typeCounts = {};
   deckCards.forEach(c => {
     const t = getTypePermutation(c.type_line);
@@ -1582,7 +1724,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty }) {
                             }}>
                             {isCommander && <span style={{ fontSize: 12, color: "#a855f7", marginRight: 2 }} title="Commander">★</span>}
                             <div style={{ flex: 1, fontSize: 13, color: "var(--text)" }}>{card.name}</div>
-                            <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card)}</div>
+                            <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card, priceSource, ckPrices)}</div>
                             <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
                             <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
                             <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
