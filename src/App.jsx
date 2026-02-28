@@ -257,6 +257,40 @@ const TYPE_GROUP_ORDER = [
   "Land", "Other",
 ];
 
+// ─── Normalisation ───────────────────────────────────────────────────────────
+function normalizeCollection(cards) {
+  const map = new Map();
+  cards.forEach(card => {
+    const id = card.id.replace("-nonfoil", "");
+    if (map.has(id)) {
+      const existing = map.get(id);
+      existing.qty = (existing.qty || 1) + (card.qty || 1);
+      if (card.addedAt > existing.addedAt) existing.addedAt = card.addedAt;
+    } else {
+      map.set(id, { ...card, id });
+    }
+  });
+  return Array.from(map.values());
+}
+
+function normalizeDecks(decks) {
+  return decks.map(deck => ({
+    ...deck,
+    cards: deck.cards.map(c => ({
+      ...c,
+      collectionId: c.collectionId.replace("-nonfoil", "")
+    })).reduce((acc, c) => {
+      const existing = acc.find(x => x.collectionId === c.collectionId);
+      if (existing) {
+        existing.qty = (existing.qty || 1) + (c.qty || 1);
+      } else {
+        acc.push(c);
+      }
+      return acc;
+    }, [])
+  }));
+}
+
 // ─── Serialisation: card ↔ sheet row ─────────────────────────────────────────
 // Collection sheet columns: id | name | set_name | set | collector_number | qty | prices_json | card_json
 function cardToRow(card) {
@@ -393,10 +427,20 @@ export default function App() {
       ]);
       const cards = collRows.map(rowToCard).filter(Boolean);
       const dks = deckRows.map(row => rowToDeck(row, cards)).filter(Boolean);
-      setCollection(cards);
-      setDecks(dks);
+
+      const normalizedCards = normalizeCollection(cards);
+      const normalizedDecks = normalizeDecks(dks);
+
+      setCollection(normalizedCards);
+      setDecks(normalizedDecks);
+
+      if (normalizedCards.length < cards.length) {
+        setSyncMsg(`Deduplicated ${cards.length - normalizedCards.length} entries...`);
+        setTimeout(triggerSave, 2000);
+      }
+
       setSyncStatus("idle");
-      setSyncMsg(`Loaded ${cards.length} cards`);
+      setSyncMsg(`Loaded ${normalizedCards.length} cards`);
     } catch (e) {
       setSyncStatus("error");
       setSyncMsg(`Load failed: ${e.message}`);
@@ -588,7 +632,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPric
       const hasFoil = card.finishes?.includes("foil");
 
       if (hasNonFoil) {
-        expandedResults.push({ ...card, isFoil: false, id: `${card.id}-nonfoil` });
+        expandedResults.push({ ...card, isFoil: false, id: card.id });
       }
       if (hasFoil) {
         expandedResults.push({ ...card, isFoil: true, id: `${card.id}-foil` });
