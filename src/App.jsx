@@ -600,7 +600,7 @@ export default function App() {
       </nav>
 
       <main className="app-main">
-        {tab === "search" && <SearchTab onAdd={addToCollection} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
+        {tab === "search" && <SearchTab onAdd={addToCollection} onRemove={removeFromCollection} onQty={updateQty} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
         {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
         {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
       </main>
@@ -609,7 +609,7 @@ export default function App() {
 }
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
-function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPrices }) {
+function SearchTab({ onAdd, onRemove, onQty, collection, decks, onToggleDeck, priceSource, ckPrices }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -709,6 +709,7 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPric
   const [openDeckPopover, setOpenDeckPopover] = useState(null);
   // { card, deckId } when user picks a deck for a card not yet in collection
   const [pendingInlineAdd, setPendingInlineAdd] = useState(null);
+  const [pendingRemoveCard, setPendingRemoveCard] = useState(null);
 
   const handleInlineDeckToggle = (card, deckId) => {
     const collectionCard = collection.find(c => c.id === card.id);
@@ -797,17 +798,35 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPric
                   {/* ── Inline action buttons ── */}
                   <div style={{ display: "flex", gap: 6, paddingRight: 10, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                     {/* Add to Collection */}
-                    <button
-                      onClick={() => onAdd(card)}
-                      title={inColl ? "Add another copy to collection" : "Add to collection"}
-                      style={{
-                        padding: "5px 10px", borderRadius: 6, border: `1px solid ${inColl ? "rgba(74,170,74,0.5)" : "rgba(200,168,75,0.4)"}`,
-                        background: inColl ? "rgba(74,170,74,0.1)" : "rgba(200,168,75,0.08)",
-                        color: inColl ? "#81c784" : "#c8a84b", cursor: "pointer", fontSize: 12,
-                        fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s",
+                    {inColl ? (
+                      <div style={{
+                        display: "flex", alignItems: "center", borderRadius: 6,
+                        border: "1px solid rgba(74,170,74,0.5)", background: "rgba(74,170,74,0.1)",
+                        overflow: "hidden"
                       }}>
-                      {inColl ? "✓" : "+"} {inColl ? "In Collection" : "Collection"}
-                    </button>
+                        <button onClick={() => {
+                          if (collectionCard?.qty > 1) {
+                            onQty(collectionCard.id, -1);
+                          } else {
+                            setPendingRemoveCard(collectionCard);
+                          }
+                        }} style={{ padding: "5px 10px", background: "transparent", border: "none", color: "#81c784", cursor: "pointer", fontSize: 14 }}>-</button>
+                        <span style={{ color: "#81c784", fontSize: 13, minWidth: 20, textAlign: "center", fontWeight: "bold" }}>{collectionCard?.qty || 1}</span>
+                        <button onClick={() => onQty(collectionCard.id, 1)} style={{ padding: "5px 10px", background: "transparent", border: "none", color: "#81c784", cursor: "pointer", fontSize: 14 }}>+</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => onAdd(card)}
+                        title="Add to collection"
+                        style={{
+                          padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(200,168,75,0.4)",
+                          background: "rgba(200,168,75,0.08)",
+                          color: "#c8a84b", cursor: "pointer", fontSize: 12,
+                          fontFamily: "inherit", whiteSpace: "nowrap", transition: "all 0.15s",
+                        }}>
+                        + Collection
+                      </button>
+                    )}
 
                     {/* Add to Deck — only if decks exist */}
                     {decks && decks.length > 0 && (
@@ -844,9 +863,9 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPric
         </div>
       )}
 
-      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
+      {!loading && selected && <CardDetail card={selected} onAdd={onAdd} onRemove={onRemove} onQty={onQty} inCollection={inCollection} onBack={() => setSelected(null)} decks={decks} onToggleDeck={onToggleDeck} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
       {/* Suppress tooltip when any modal or popover is active, or a card is selected */}
-      {!selected && !openDeckPopover && !pendingInlineAdd && (
+      {!selected && !openDeckPopover && !pendingInlineAdd && !pendingRemoveCard && (
         <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
       )}
 
@@ -858,13 +877,24 @@ function SearchTab({ onAdd, collection, decks, onToggleDeck, priceSource, ckPric
           onNo={() => handleInlinePendingConfirm(false)}
         />
       )}
+      {pendingRemoveCard && (
+        <RemoveFromCollectionPrompt
+          cardName={pendingRemoveCard.name}
+          onConfirm={() => {
+            onRemove(pendingRemoveCard.id);
+            setPendingRemoveCard(null);
+          }}
+          onCancel={() => setPendingRemoveCard(null)}
+        />
+      )}
     </div>
   );
 }
-function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, collection, priceSource, ckPrices }) {
+function CardDetail({ card, onAdd, onRemove, onQty, inCollection, onBack, decks, onToggleDeck, collection, priceSource, ckPrices }) {
   const [showFull, setShowFull] = useState(false);
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const [pendingDeckId, setPendingDeckId] = useState(null); // deck awaiting collection prompt
+  const [pendingRemoveDetail, setPendingRemoveDetail] = useState(false);
   const img = getImage(card);
 
   // Find the collection entry for this Scryfall card (matched by Scryfall id)
@@ -931,9 +961,23 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
           </div>
           {card.flavor_text && <div style={{ fontSize: 13, color: "#666", fontStyle: "italic", marginBottom: 12 }}>"{card.flavor_text}"</div>}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <button onClick={() => onAdd(card)} style={{ ...btnStyle(inCollection ? "#4a6a4a" : "#c8a84b", inCollection ? "#001a00" : "#1a1200"), fontSize: 15, padding: "12px 24px" }}>
-              {inCollection ? "✓ Add Another Copy" : "+ Add to Collection"}
-            </button>
+            {inCollection ? (
+              <div style={{ display: "flex", alignItems: "center", borderRadius: 8, border: "1px solid rgba(74,170,74,0.5)", background: "rgba(74,170,74,0.1)", overflow: "hidden" }}>
+                <button onClick={() => {
+                  if (collectionCard?.qty > 1) {
+                    onQty(collectionCard.id, -1);
+                  } else {
+                    setPendingRemoveDetail(true);
+                  }
+                }} style={{ padding: "12px 20px", background: "transparent", border: "none", color: "#81c784", cursor: "pointer", fontSize: 18 }}>-</button>
+                <div style={{ color: "#81c784", fontSize: 14, minWidth: 32, textAlign: "center", fontWeight: "bold" }}>{collectionCard?.qty || 1} IN COLLECTION</div>
+                <button onClick={() => onQty(collectionCard.id, 1)} style={{ padding: "12px 20px", background: "transparent", border: "none", color: "#81c784", cursor: "pointer", fontSize: 18 }}>+</button>
+              </div>
+            ) : (
+              <button onClick={() => onAdd(card)} style={{ ...btnStyle("#c8a84b", "#1a1200"), fontSize: 15, padding: "12px 24px" }}>
+                + Add to Collection
+              </button>
+            )}
             {decks && decks.length > 0 && (
               <div style={{ position: "relative" }}>
                 <button
@@ -966,6 +1010,16 @@ function CardDetail({ card, onAdd, inCollection, onBack, decks, onToggleDeck, co
           cardName={card.name}
           onYes={() => handleAddToDeckWithCollection(true)}
           onNo={() => handleAddToDeckWithCollection(false)}
+        />
+      )}
+      {pendingRemoveDetail && (
+        <RemoveFromCollectionPrompt
+          cardName={card.name}
+          onConfirm={() => {
+            onRemove(collectionCard.id);
+            setPendingRemoveDetail(false);
+          }}
+          onCancel={() => setPendingRemoveDetail(false)}
         />
       )}
     </div>
@@ -1055,6 +1109,25 @@ function AddToCollectionPrompt({ cardName, onYes, onNo }) {
         <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
           <button onClick={onNo} style={{ ...btnStyle("rgba(255,255,255,0.08)", "#aaa"), padding: "10px 20px" }}>Deck only</button>
           <button onClick={onYes} style={{ ...btnStyle("#c8a84b", "#1a1200"), padding: "10px 20px" }}>+ Add to both</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Modal: Confirm removal from collection entirely
+function RemoveFromCollectionPrompt({ cardName, onConfirm, onCancel }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ background: "#1a1a20", border: "1px solid rgba(229,115,115,0.4)", borderRadius: 14, padding: "28px 32px", maxWidth: 360, textAlign: "center", boxShadow: "0 12px 40px rgba(0,0,0,0.8)" }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>🗑️</div>
+        <div style={{ fontSize: 16, fontWeight: "bold", color: "var(--text)", marginBottom: 8 }}>{cardName}</div>
+        <div style={{ fontSize: 14, color: "#888", marginBottom: 24, lineHeight: 1.5 }}>
+          Remove this card from your collection entirely?
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button onClick={onCancel} style={{ ...btnStyle("rgba(255,255,255,0.08)", "#aaa"), padding: "10px 20px" }}>Cancel</button>
+          <button onClick={onConfirm} style={{ ...btnStyle("#e57373", "#1a0000"), padding: "10px 20px" }}>Remove</button>
         </div>
       </div>
     </div>
