@@ -348,7 +348,261 @@ function ColorPip({ c }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-export default function App() {
+export default App;
+
+// ─── Find Combos Tab ──────────────────────────────────────────────────────────
+
+function FindCombosTab({ collection }) {
+  const [query, setQuery] = useState("");
+  const [combos, setCombos] = useState([]);
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [errorMsg, setErrorMsg] = useState("");
+  const [expanded, setExpanded] = useState({});
+
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+
+  // Autocomplete state
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [focusIndex, setFocusIndex] = useState(-1);
+  const searchBarRef = useRef(null);
+
+  const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (searchBarRef.current && !searchBarRef.current.contains(e.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Debounced autocomplete fetch
+  useEffect(() => {
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      // Don't search if the query is an exact match for a recently clicked suggestion
+      if (suggestions.includes(query)) return;
+
+      try {
+        const res = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(query)}`);
+        if (res.ok) {
+          const data = await res.json();
+          // Verify query didn't change while waiting
+          const newSuggestions = data.data || [];
+          if (!newSuggestions.includes(query)) {
+            setSuggestions(newSuggestions);
+            setShowSuggestions(true);
+            setFocusIndex(-1);
+          }
+        }
+      } catch (e) {
+        // ignore error
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query, suggestions]);
+
+  const handleKeyDown = (e) => {
+    if (!showSuggestions || suggestions.length === 0) {
+      if (e.key === "Enter") handleSearch();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setFocusIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : prev));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setFocusIndex(prev => (prev > 0 ? prev - 1 : -1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (focusIndex >= 0 && focusIndex < suggestions.length) {
+        const selectedQuery = suggestions[focusIndex];
+        setQuery(selectedQuery);
+        setShowSuggestions(false);
+        setTimeout(() => handleSearch(selectedQuery), 0);
+      } else {
+        setShowSuggestions(false);
+        handleSearch();
+      }
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
+  };
+
+  const handleSearch = async (forcedQuery) => {
+    const q = forcedQuery || query;
+    if (!q.trim()) return;
+    setStatus("loading");
+    setErrorMsg("");
+    setCombos([]);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    try {
+      const results = await fetchCombosForCard(q);
+
+      // Calculate owned vs total pieces
+      const scored = results.map(v => {
+        const comboNames = v.uses.map(u => u.card.name.toLowerCase());
+        const owned = comboNames.filter(n => collectionNames.has(n)).length;
+        return { ...v, _owned: owned, _total: comboNames.length };
+      });
+
+      // Sort: fully-owned first, then by coverage desc, then popularity desc
+      scored.sort((a, b) =>
+        b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity
+      );
+
+      setCombos(scored);
+      setStatus("done");
+    } catch (e) {
+      console.error(e);
+      setErrorMsg(e.message);
+      setStatus("error");
+    }
+  };
+
+  const fullCombos = combos.filter(c => c._owned === c._total);
+  const partialCombos = combos.filter(c => c._owned > 0 && c._owned < c._total);
+  const noneOwnedCombos = combos.filter(c => c._owned === 0);
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto", padding: "20px 0" }}>
+      <div className="search-bar-row" style={{ position: "relative", marginBottom: 30 }} ref={searchBarRef}>
+        <input
+          value={query}
+          onChange={e => {
+            setQuery(e.target.value);
+            if (!showSuggestions) setShowSuggestions(true);
+          }}
+          onKeyDown={handleKeyDown}
+          onFocus={() => {
+            if (query.trim().length >= 2) setShowSuggestions(true);
+          }}
+          placeholder="Search for a card to find combos..."
+          style={{ padding: "14px 18px", background: "var(--input-bg)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "var(--text)", fontSize: 18, fontFamily: "inherit", outline: "none", width: "100%", boxSizing: "border-box", textAlign: "center" }}
+        />
+        <button onClick={() => handleSearch()} style={{ ...btnStyle("#c8a84b", "#1a1200"), flexShrink: 0, padding: "0 24px", fontSize: 16 }}>Scan</button>
+
+        {showSuggestions && suggestions.length > 0 && (
+          <div style={{
+            position: "absolute", top: "100%", left: 0, right: 100, marginTop: 4, background: "#1a1a20",
+            border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, boxShadow: "0 8px 32px rgba(0,0,0,0.8)", zIndex: 1000,
+            maxHeight: 280, overflowY: "auto", padding: "4px 0", textAlign: "left"
+          }}>
+            {suggestions.map((sug, i) => (
+              <div key={sug} onMouseDown={(e) => {
+                e.preventDefault(); // prevents input from losing focus entirely/blurring
+                setQuery(sug);
+                setShowSuggestions(false);
+                setTimeout(() => handleSearch(sug), 0);
+              }}
+                onMouseEnter={() => setFocusIndex(i)}
+                style={{ padding: "10px 16px", cursor: "pointer", background: i === focusIndex ? "rgba(200,168,75,0.15)" : "transparent", color: i === focusIndex ? "#c8a84b" : "var(--text)", fontFamily: "inherit", fontSize: 15 }}>
+                <span style={{ textTransform: "capitalize" }}>{sug}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {status === "loading" && <div style={{ textAlign: "center", padding: 40, color: "#c8a84b" }}>⟳ Scanning Spellbook for known interactions...</div>}
+
+      {status === "error" && (
+        <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
+          <div>Failed to fetch combos.</div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>{errorMsg}</div>
+        </div>
+      )}
+
+      {status === "done" && combos.length === 0 && (
+        <div style={{ textAlign: "center", padding: 40, color: "#555" }}>No combos found involving this card.</div>
+      )}
+
+      {status === "done" && combos.length > 0 && (
+        <div>
+          {[{ label: "✅ Fully Owned Combos", list: fullCombos, accent: "#4ade80" },
+          { label: "⚡ Partial Combos (missing cards)", list: partialCombos, accent: "#c8a84b" },
+          { label: "❌ Unowned Combos", list: noneOwnedCombos, accent: "#888" }]
+            .map(({ label, list, accent }) => list.length === 0 ? null : (
+              <div key={label} style={{ marginBottom: 30 }}>
+                <div style={{ fontSize: 12, letterSpacing: 1, color: accent, marginBottom: 12, borderBottom: `1px solid ${accent}33`, paddingBottom: 6 }}>{label.toUpperCase()} ({list.length})</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {list.map(variant => {
+                    const isOpen = expanded[variant.id];
+                    return (
+                      <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${variant._owned === variant._total ? "rgba(74,222,128,0.2)" : "rgba(200,168,75,0.15)"}`, borderRadius: 8, overflow: "hidden" }}>
+                        <div onClick={() => setExpanded(e => ({ ...e, [variant.id]: !e[variant.id] }))} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 16px", cursor: "pointer" }}>
+                          {/* Cards */}
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1 }}>
+                            {variant.uses.map(u => {
+                              const lc = u.card.name.toLowerCase();
+                              const owned = collectionNames.has(lc);
+                              const tooltipCard = { id: String(u.card.id), name: u.card.name, image_uris: { normal: u.card.imageUriFrontNormal } };
+                              const borderColor = owned ? "rgba(74,222,128,0.4)" : "rgba(255,255,255,0.1)";
+                              const bgColor = owned ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.03)";
+                              const textColor = owned ? "#86efac" : "#888";
+                              return (
+                                <span key={u.card.id} onMouseEnter={e => handleMouseEnter(tooltipCard, e)} onMouseMove={e => handleMouseMove(tooltipCard, e)} onMouseLeave={handleMouseLeave}
+                                  style={{ fontSize: 13, padding: "4px 8px", borderRadius: 6, cursor: "default", background: bgColor, border: `1px solid ${borderColor}`, color: textColor }}>
+                                  {owned ? "✓ " : ""}{u.card.name}
+                                </span>
+                              );
+                            })}
+                          </div>
+                          {/* Results summary */}
+                          <div style={{ minWidth: 140, textAlign: "right", marginTop: 2 }}>
+                            {variant.produces.slice(0, 2).map(p => (
+                              <div key={p.feature.id} style={{ fontSize: 12, color: "#a855f7", marginBottom: 2 }}>{p.feature.name}</div>
+                            ))}
+                            {variant.produces.length > 2 && <div style={{ fontSize: 11, color: "#666" }}>+{variant.produces.length - 2} more</div>}
+                          </div>
+                          <span style={{ color: "#555", fontSize: 14, marginTop: 2, marginLeft: 8 }}>{isOpen ? "▲" : "▼"}</span>
+                        </div>
+
+                        {isOpen && (
+                          <div style={{ padding: "0 16px 16px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                            {variant.notablePrerequisites && (
+                              <div style={{ marginTop: 12, marginBottom: 12 }}>
+                                <div style={{ fontSize: 11, color: "#888", letterSpacing: 1, marginBottom: 6 }}>PREREQUISITES</div>
+                                <div style={{ fontSize: 13, color: "#ffb74d", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{variant.notablePrerequisites}</div>
+                              </div>
+                            )}
+                            <div style={{ marginTop: 10 }}>
+                              <div style={{ fontSize: 11, color: "#888", letterSpacing: 1, marginBottom: 6 }}>STEPS</div>
+                              <div style={{ fontSize: 13, color: "#d0c8b8", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{variant.description}</div>
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+                              {variant.produces.map(p => (
+                                <span key={p.feature.id} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 12, background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>{p.feature.name}</span>
+                              ))}
+                            </div>
+                            <div style={{ marginTop: 12, fontSize: 12, color: "#666" }}>Popularity: {variant.popularity}</div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      )}
+
+      {/* Global CardTooltip needed for hover events outside of normal loops */}
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+    </div>
+  );
+}
+function App() {
   const [tab, setTab] = useState("search");
   const [collection, setCollection] = useState([]);
   const [decks, setDecks] = useState([]);
@@ -588,7 +842,7 @@ export default function App() {
 
       {/* Nav */}
       <nav style={{ display: "flex", borderBottom: "1px solid var(--border)", background: "var(--surface)" }}>
-        {[{ id: "search", label: "🔍 Search & Add" }, { id: "collection", label: "📚 Collection" }, { id: "decks", label: "🃏 Decks" }].map(t => (
+        {[{ id: "search", label: "🔍 Search & Add" }, { id: "collection", label: "📚 Collection" }, { id: "decks", label: "🃏 Decks" }, { id: "combos", label: "⚡ Find Combos" }].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
             flex: 1, padding: "14px 8px", border: "none", cursor: "pointer",
             background: tab === t.id ? "rgba(200,168,75,0.12)" : "transparent",
@@ -603,6 +857,7 @@ export default function App() {
         {tab === "search" && <SearchTab onAdd={addToCollection} onRemove={removeFromCollection} onQty={updateQty} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
         {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
         {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
+        {tab === "combos" && <FindCombosTab collection={collection} />}
       </main>
     </div>
   );
