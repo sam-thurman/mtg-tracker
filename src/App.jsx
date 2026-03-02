@@ -620,11 +620,85 @@ function SearchTab({ onAdd, onRemove, onQty, collection, decks, onToggleDeck, pr
   const [cameraError, setCameraError] = useState("");
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
 
-  const search = async () => {
-    if (!query.trim()) return;
+  // Autocomplete state
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [focusIndex, setFocusIndex] = useState(-1);
+  const searchBarRef = useRef(null);
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (searchBarRef.current && !searchBarRef.current.contains(e.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Debounced autocomplete fetch
+  useEffect(() => {
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(query)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data.data || []);
+          setShowSuggestions(true);
+          setFocusIndex(-1);
+        }
+      } catch (e) {
+        // ignore autocomplete errors
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const handleKeyDown = (e) => {
+    if (!showSuggestions || suggestions.length === 0) {
+      if (e.key === "Enter") search();
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setFocusIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : prev));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setFocusIndex(prev => (prev > 0 ? prev - 1 : -1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (focusIndex >= 0 && focusIndex < suggestions.length) {
+        const selectedQuery = suggestions[focusIndex];
+        setQuery(selectedQuery);
+        setShowSuggestions(false);
+        // We can't easily wait for setQuery to flush before searching, 
+        // so we pass the selected word directly to a modified search execution flow or 
+        // rely on the query state update and trigger search in the next render cycle. 
+        // For simplicity:
+        executeSearch(selectedQuery);
+      } else {
+        setShowSuggestions(false);
+        search();
+      }
+    } else if (e.key === "Escape") {
+      setShowSuggestions(false);
+    }
+  };
+
+  const executeSearch = async (forcedQuery) => {
+    const q = forcedQuery || query;
+    if (!q.trim()) return;
     setLoading(true);
     setSelected(null);
-    const cards = await searchCards(query);
+    setShowSuggestions(false);
+    const cards = await searchCards(q);
     // Expand results to include foil versions if available
     const expandedResults = [];
     cards.forEach(card => {
@@ -645,6 +719,8 @@ function SearchTab({ onAdd, onRemove, onQty, collection, decks, onToggleDeck, pr
     setLoading(false);
     if (expandedResults.length === 1) setSelected(expandedResults[0]);
   };
+
+  const search = () => executeSearch();
 
   const startCamera = async () => {
     setCameraError("");
@@ -738,11 +814,63 @@ function SearchTab({ onAdd, onRemove, onQty, collection, decks, onToggleDeck, pr
 
   return (
     <div>
-      <div className="search-bar-row">
-        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()}
-          placeholder="Search card name..." style={{ padding: "12px 16px", background: "var(--input-bg)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "var(--text)", fontSize: 16, fontFamily: "inherit", outline: "none" }} />
-        <button onClick={search} style={btnStyle("#c8a84b", "#1a1200")}>Search</button>
-        <button onClick={cameraMode ? stopCamera : startCamera} style={btnStyle("#4a8a6a", "#001a0d")}>{cameraMode ? "✕ Cancel" : "📷 Scan"}</button>
+      <div className="search-bar-row" ref={searchBarRef} style={{ position: "relative" }}>
+        <input
+          value={query}
+          onChange={e => {
+            setQuery(e.target.value);
+            if (!showSuggestions) setShowSuggestions(true);
+          }}
+          onKeyDown={handleKeyDown}
+          onFocus={() => {
+            if (query.trim().length >= 2) setShowSuggestions(true);
+          }}
+          placeholder="Search card name..."
+          style={{ padding: "12px 16px", background: "var(--input-bg)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8, color: "var(--text)", fontSize: 16, fontFamily: "inherit", outline: "none", width: "100%", boxSizing: "border-box" }}
+        />
+        <button onClick={search} style={{ ...btnStyle("#c8a84b", "#1a1200"), flexShrink: 0 }}>Search</button>
+        <button onClick={cameraMode ? stopCamera : startCamera} style={{ ...btnStyle("#4a8a6a", "#001a0d"), flexShrink: 0 }}>{cameraMode ? "✕ Cancel" : "📷 Scan"}</button>
+
+        {/* Autocomplete Dropdown */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 180, // rough offset to not cover buttons fully on wide screens, can be adjusted
+            marginTop: 4,
+            background: "#1a1a20",
+            border: "1px solid rgba(200,168,75,0.3)",
+            borderRadius: 8,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.8)",
+            zIndex: 1000,
+            maxHeight: 280,
+            overflowY: "auto",
+            padding: "4px 0"
+          }}>
+            {suggestions.map((sug, i) => (
+              <div
+                key={sug}
+                onClick={() => {
+                  setQuery(sug);
+                  setShowSuggestions(false);
+                  executeSearch(sug);
+                }}
+                onMouseEnter={() => setFocusIndex(i)}
+                style={{
+                  padding: "10px 16px",
+                  cursor: "pointer",
+                  background: i === focusIndex ? "rgba(200,168,75,0.15)" : "transparent",
+                  color: i === focusIndex ? "#c8a84b" : "var(--text)",
+                  fontFamily: "inherit",
+                  fontSize: 15
+                }}
+              >
+                {sug}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {cameraMode && (
