@@ -2360,16 +2360,25 @@ function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, comm
       const seen = new Set();
       const all = [];
       batchResults.flat().forEach(v => { if (!seen.has(v.id)) { seen.add(v.id); all.push(v); } });
-      // Score: how many cards in this combo are owned in the deck
+      // Score: how many cards in this combo are owned in the deck vs collection
       const scored = all.map(v => {
         const comboNames = v.uses.map(u => u.card.name.toLowerCase());
         const owned = comboNames.filter(n => deckNames.has(n)).length;
-        return { ...v, _owned: owned, _total: comboNames.length };
+        const collectionOwned = comboNames.filter(n => collectionNames.has(n)).length;
+        return { ...v, _owned: owned, _collectionOwned: collectionOwned, _total: comboNames.length };
       });
-      // Sort: fully-owned combos first, then by coverage desc, then popularity desc
-      scored.sort((a, b) =>
-        b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity
-      );
+      // Sort: fully deck-owned first, fully collection-owned next, then by coverage desc, then popularity desc
+      scored.sort((a, b) => {
+        const aFullDeck = a._owned === a._total ? 1 : 0;
+        const bFullDeck = b._owned === b._total ? 1 : 0;
+        if (aFullDeck !== bFullDeck) return bFullDeck - aFullDeck;
+
+        const aFullColl = a._collectionOwned === a._total ? 1 : 0;
+        const bFullColl = b._collectionOwned === b._total ? 1 : 0;
+        if (aFullColl !== bFullColl) return bFullColl - aFullColl;
+
+        return b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity;
+      });
       // No per-combo Scryfall lookup needed — Spellbook returns variant.identity (e.g. "BG")
       setEffectiveDeckCI(resolvedCI);
       setCombos(scored);
@@ -2409,14 +2418,16 @@ function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, comm
   };
   const filteredCombos = combos.filter(isColorLegal);
   const fullCombos = filteredCombos.filter(c => c._owned === c._total);
-  const partialCombos = filteredCombos.filter(c => c._owned > 0 && c._owned < c._total);
+  const ownedCombos = filteredCombos.filter(c => c._owned < c._total && c._collectionOwned === c._total);
+  const partialCombos = filteredCombos.filter(c => c._owned > 0 && c._owned < c._total && c._collectionOwned < c._total);
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, color: "#888" }}>
           {combos.length} combos found ·
-          <span style={{ color: "#4ade80", marginLeft: 6 }}>{fullCombos.length} complete</span>
+          <span style={{ color: "#4ade80", marginLeft: 6 }}>{fullCombos.length} deck</span>
+          <span style={{ color: "#3b82f6", marginLeft: 6 }}>{ownedCombos.length} collection</span>
           <span style={{ color: "#c8a84b", marginLeft: 6 }}>{partialCombos.length} partial</span>
         </div>
         {effectiveDeckCI && effectiveDeckCI.size > 0 && (
@@ -2438,6 +2449,7 @@ function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, comm
       )}
 
       {[{ label: "✅ Complete Combos", list: fullCombos, accent: "#4ade80" },
+      { label: "📦 Owned Combos (in collection)", list: ownedCombos, accent: "#3b82f6" },
       { label: "⚡ Partial Combos (missing cards)", list: partialCombos, accent: "#c8a84b" }]
         .map(({ label, list, accent }) => list.length === 0 ? null : (
           <div key={label} style={{ marginBottom: 20 }}>
@@ -2445,8 +2457,9 @@ function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, comm
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {list.map(variant => {
                 const isOpen = expanded[variant.id];
+                const borderColor = variant._owned === variant._total ? "rgba(74,222,128,0.2)" : variant._collectionOwned === variant._total ? "rgba(59,130,246,0.2)" : "rgba(200,168,75,0.15)";
                 return (
-                  <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${variant._owned === variant._total ? "rgba(74,222,128,0.2)" : "rgba(200,168,75,0.15)"}`, borderRadius: 8, overflow: "hidden" }}>
+                  <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${borderColor}`, borderRadius: 8, overflow: "hidden" }}>
                     {/* Header row */}
                     <div onClick={() => setExpanded(e => ({ ...e, [variant.id]: !e[variant.id] }))}
                       style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", cursor: "pointer" }}>
