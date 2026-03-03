@@ -354,20 +354,13 @@ export default App;
 
 function FindCombosTab({ collection }) {
   const [query, setQuery] = useState("");
-  const [combos, setCombos] = useState([]);
-  const [status, setStatus] = useState("idle"); // idle | loading | done | error
-  const [errorMsg, setErrorMsg] = useState("");
-  const [expanded, setExpanded] = useState({});
-
-  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+  const [activeSearch, setActiveSearch] = useState(null); // The finalized search query to trigger combo fetch
 
   // Autocomplete state
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [focusIndex, setFocusIndex] = useState(-1);
   const searchBarRef = useRef(null);
-
-  const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -437,41 +430,13 @@ function FindCombosTab({ collection }) {
     }
   };
 
-  const handleSearch = async (forcedQuery) => {
+  const handleSearch = (forcedQuery) => {
     const q = forcedQuery || query;
     if (!q.trim()) return;
-    setStatus("loading");
-    setErrorMsg("");
-    setCombos([]);
     setShowSuggestions(false);
     setSuggestions([]);
-    try {
-      const results = await fetchCombosForCard(q);
-
-      // Calculate owned vs total pieces
-      const scored = results.map(v => {
-        const comboNames = v.uses.map(u => u.card.name.toLowerCase());
-        const owned = comboNames.filter(n => collectionNames.has(n)).length;
-        return { ...v, _owned: owned, _total: comboNames.length };
-      });
-
-      // Sort: fully-owned first, then by coverage desc, then popularity desc
-      scored.sort((a, b) =>
-        b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity
-      );
-
-      setCombos(scored);
-      setStatus("done");
-    } catch (e) {
-      console.error(e);
-      setErrorMsg(e.message);
-      setStatus("error");
-    }
+    setActiveSearch(q);
   };
-
-  const fullCombos = combos.filter(c => c._owned === c._total);
-  const partialCombos = combos.filter(c => c._owned > 0 && c._owned < c._total);
-  const noneOwnedCombos = combos.filter(c => c._owned === 0);
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto", padding: "20px 0" }}>
@@ -513,94 +478,155 @@ function FindCombosTab({ collection }) {
         )}
       </div>
 
-      {status === "loading" && <div style={{ textAlign: "center", padding: 40, color: "#c8a84b" }}>⟳ Scanning Spellbook for known interactions...</div>}
-
-      {status === "error" && (
-        <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
-          <div>Failed to fetch combos.</div>
-          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>{errorMsg}</div>
-        </div>
-      )}
-
-      {status === "done" && combos.length === 0 && (
-        <div style={{ textAlign: "center", padding: 40, color: "#555" }}>No combos found involving this card.</div>
-      )}
-
-      {status === "done" && combos.length > 0 && (
-        <div>
-          {[{ label: "✅ Fully Owned Combos", list: fullCombos, accent: "#4ade80" },
-          { label: "⚡ Partial Combos (missing cards)", list: partialCombos, accent: "#c8a84b" },
-          { label: "❌ Unowned Combos", list: noneOwnedCombos, accent: "#888" }]
-            .map(({ label, list, accent }) => list.length === 0 ? null : (
-              <div key={label} style={{ marginBottom: 30 }}>
-                <div style={{ fontSize: 12, letterSpacing: 1, color: accent, marginBottom: 12, borderBottom: `1px solid ${accent}33`, paddingBottom: 6 }}>{label.toUpperCase()} ({list.length})</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {list.map(variant => {
-                    const isOpen = expanded[variant.id];
-                    return (
-                      <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${variant._owned === variant._total ? "rgba(74,222,128,0.2)" : "rgba(200,168,75,0.15)"}`, borderRadius: 8, overflow: "hidden" }}>
-                        <div onClick={() => setExpanded(e => ({ ...e, [variant.id]: !e[variant.id] }))} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 16px", cursor: "pointer" }}>
-                          {/* Cards */}
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1 }}>
-                            {variant.uses.map(u => {
-                              const lc = u.card.name.toLowerCase();
-                              const owned = collectionNames.has(lc);
-                              const tooltipCard = { id: String(u.card.id), name: u.card.name, image_uris: { normal: u.card.imageUriFrontNormal } };
-                              const borderColor = owned ? "rgba(74,222,128,0.4)" : "rgba(255,255,255,0.1)";
-                              const bgColor = owned ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.03)";
-                              const textColor = owned ? "#86efac" : "#888";
-                              return (
-                                <span key={u.card.id} onMouseEnter={e => handleMouseEnter(tooltipCard, e)} onMouseMove={e => handleMouseMove(tooltipCard, e)} onMouseLeave={handleMouseLeave}
-                                  style={{ fontSize: 13, padding: "4px 8px", borderRadius: 6, cursor: "default", background: bgColor, border: `1px solid ${borderColor}`, color: textColor }}>
-                                  {owned ? "✓ " : ""}{u.card.name}
-                                </span>
-                              );
-                            })}
-                          </div>
-                          {/* Results summary */}
-                          <div style={{ minWidth: 140, textAlign: "right", marginTop: 2 }}>
-                            {variant.produces.slice(0, 2).map(p => (
-                              <div key={p.feature.id} style={{ fontSize: 12, color: "#a855f7", marginBottom: 2 }}>{p.feature.name}</div>
-                            ))}
-                            {variant.produces.length > 2 && <div style={{ fontSize: 11, color: "#666" }}>+{variant.produces.length - 2} more</div>}
-                          </div>
-                          <span style={{ color: "#555", fontSize: 14, marginTop: 2, marginLeft: 8 }}>{isOpen ? "▲" : "▼"}</span>
-                        </div>
-
-                        {isOpen && (
-                          <div style={{ padding: "0 16px 16px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                            {variant.notablePrerequisites && (
-                              <div style={{ marginTop: 12, marginBottom: 12 }}>
-                                <div style={{ fontSize: 11, color: "#888", letterSpacing: 1, marginBottom: 6 }}>PREREQUISITES</div>
-                                <div style={{ fontSize: 13, color: "#ffb74d", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{variant.notablePrerequisites}</div>
-                              </div>
-                            )}
-                            <div style={{ marginTop: 10 }}>
-                              <div style={{ fontSize: 11, color: "#888", letterSpacing: 1, marginBottom: 6 }}>STEPS</div>
-                              <div style={{ fontSize: 13, color: "#d0c8b8", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{variant.description}</div>
-                            </div>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
-                              {variant.produces.map(p => (
-                                <span key={p.feature.id} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 12, background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>{p.feature.name}</span>
-                              ))}
-                            </div>
-                            <div style={{ marginTop: 12, fontSize: 12, color: "#666" }}>Popularity: {variant.popularity}</div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))
-          }
-        </div>
-      )}
-
-      {/* Global CardTooltip needed for hover events outside of normal loops */}
-      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+      {activeSearch && <CardCombos card={{ name: activeSearch }} collection={collection} />}
     </div>
   );
+}
+
+function CardCombos({ card, collection }) {
+  const [combos, setCombos] = useState([]);
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [errorMsg, setErrorMsg] = useState("");
+  const [expanded, setExpanded] = useState({});
+
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+  const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
+
+  useEffect(() => {
+    if (!card?.name) return;
+
+    let isMounted = true;
+    (async () => {
+      setStatus("loading");
+      setErrorMsg("");
+      setCombos([]);
+
+      try {
+        const results = await fetchCombosForCard(card.name);
+
+        if (!isMounted) return;
+
+        // Calculate owned vs total pieces
+        const scored = results.map(v => {
+          const comboNames = v.uses.map(u => u.card.name.toLowerCase());
+          const owned = comboNames.filter(n => collectionNames.has(n)).length;
+          return { ...v, _owned: owned, _total: comboNames.length };
+        });
+
+        // Sort: fully-owned first, then by coverage desc, then popularity desc
+        scored.sort((a, b) =>
+          b._owned - a._owned || (b._owned / b._total) - (a._owned / a._total) || b.popularity - a.popularity
+        );
+
+        setCombos(scored);
+        setStatus("done");
+      } catch (e) {
+        if (!isMounted) return;
+        console.error(e);
+        setErrorMsg(e.message);
+        setStatus("error");
+      }
+    })();
+
+    return () => { isMounted = false; };
+  }, [card?.name, collection]); // Re-run if card changes
+
+  const fullCombos = combos.filter(c => c._owned === c._total);
+  const partialCombos = combos.filter(c => c._owned > 0 && c._owned < c._total);
+  const noneOwnedCombos = combos.filter(c => c._owned === 0);
+
+  if (status === "loading") {
+    return <div style={{ textAlign: "center", padding: 40, color: "#c8a84b" }}>⟳ Scanning Spellbook for known interactions...</div>;
+  }
+
+  if (status === "error") {
+    return (
+      <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
+        <div>Failed to fetch combos.</div>
+        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>{errorMsg}</div>
+      </div>
+    );
+  }
+
+  if (status === "done" && combos.length === 0) {
+    return <div style={{ textAlign: "center", padding: 40, color: "#555" }}>No combos found involving {card.name}.</div>;
+  }
+
+  if (status === "done" && combos.length > 0) {
+    return (
+      <div style={{ marginTop: 24 }}>
+        {[{ label: "✅ Fully Owned Combos", list: fullCombos, accent: "#4ade80" },
+        { label: "⚡ Partial Combos (missing cards)", list: partialCombos, accent: "#c8a84b" },
+        { label: "❌ Unowned Combos", list: noneOwnedCombos, accent: "#888" }]
+          .map(({ label, list, accent }) => list.length === 0 ? null : (
+            <div key={label} style={{ marginBottom: 30 }}>
+              <div style={{ fontSize: 12, letterSpacing: 1, color: accent, marginBottom: 12, borderBottom: `1px solid ${accent}33`, paddingBottom: 6 }}>{label.toUpperCase()} ({list.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {list.map(variant => {
+                  const isOpen = expanded[variant.id];
+                  return (
+                    <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${variant._owned === variant._total ? "rgba(74,222,128,0.2)" : "rgba(200,168,75,0.15)"}`, borderRadius: 8, overflow: "hidden" }}>
+                      <div onClick={() => setExpanded(e => ({ ...e, [variant.id]: !e[variant.id] }))} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 16px", cursor: "pointer" }}>
+                        {/* Cards */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1 }}>
+                          {variant.uses.map(u => {
+                            const lc = u.card.name.toLowerCase();
+                            const owned = collectionNames.has(lc);
+                            const tooltipCard = { id: String(u.card.id), name: u.card.name, image_uris: { normal: u.card.imageUriFrontNormal } };
+                            const borderColor = owned ? "rgba(74,222,128,0.4)" : "rgba(255,255,255,0.1)";
+                            const bgColor = owned ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.03)";
+                            const textColor = owned ? "#86efac" : "#888";
+                            return (
+                              <span key={u.card.id} onMouseEnter={e => handleMouseEnter(tooltipCard, e)} onMouseMove={e => handleMouseMove(tooltipCard, e)} onMouseLeave={handleMouseLeave}
+                                style={{ fontSize: 13, padding: "4px 8px", borderRadius: 6, cursor: "default", background: bgColor, border: `1px solid ${borderColor}`, color: textColor }}>
+                                {owned ? "✓ " : ""}{u.card.name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        {/* Results summary */}
+                        <div style={{ minWidth: 140, textAlign: "right", marginTop: 2 }}>
+                          {variant.produces.slice(0, 2).map(p => (
+                            <div key={p.feature.id} style={{ fontSize: 12, color: "#a855f7", marginBottom: 2 }}>{p.feature.name}</div>
+                          ))}
+                          {variant.produces.length > 2 && <div style={{ fontSize: 11, color: "#666" }}>+{variant.produces.length - 2} more</div>}
+                        </div>
+                        <span style={{ color: "#555", fontSize: 14, marginTop: 2, marginLeft: 8 }}>{isOpen ? "▲" : "▼"}</span>
+                      </div>
+
+                      {isOpen && (
+                        <div style={{ padding: "0 16px 16px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                          {variant.notablePrerequisites && (
+                            <div style={{ marginTop: 12, marginBottom: 12 }}>
+                              <div style={{ fontSize: 11, color: "#888", letterSpacing: 1, marginBottom: 6 }}>PREREQUISITES</div>
+                              <div style={{ fontSize: 13, color: "#ffb74d", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{variant.notablePrerequisites}</div>
+                            </div>
+                          )}
+                          <div style={{ marginTop: 10 }}>
+                            <div style={{ fontSize: 11, color: "#888", letterSpacing: 1, marginBottom: 6 }}>STEPS</div>
+                            <div style={{ fontSize: 13, color: "#d0c8b8", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{variant.description}</div>
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+                            {variant.produces.map(p => (
+                              <span key={p.feature.id} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 12, background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>{p.feature.name}</span>
+                            ))}
+                          </div>
+                          <div style={{ marginTop: 12, fontSize: 12, color: "#666" }}>Popularity: {variant.popularity}</div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        }
+        <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+      </div>
+    );
+  }
+
+  return null;
 }
 function App() {
   const [tab, setTab] = useState("search");
@@ -1405,6 +1431,13 @@ function CardDetail({ card, onAdd, onRemove, onQty, inCollection, onBack, decks,
           onCancel={() => setPendingRemoveDetail(false)}
         />
       )}
+
+      {/* ── Combos section automatically appended below the card details ── */}
+      <div style={{ padding: "0 20px 20px" }}>
+        <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "10px 0 20px" }} />
+        <h3 style={{ margin: "0 0 10px 0", fontSize: 18, color: "var(--text)" }}>Known Combos</h3>
+        <CardCombos card={card} collection={collection} />
+      </div>
     </div>
   );
 }
@@ -1519,6 +1552,7 @@ function RemoveFromCollectionPrompt({ cardName, onConfirm, onCancel }) {
 
 // ─── Collection Tab ───────────────────────────────────────────────────────────
 function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, priceSource, ckPrices }) {
+  const [selectedCard, setSelectedCard] = useState(null);
   const [search, setSearch] = useState("");
   const [filterColor, setFilterColor] = useState("all");
   const [filterSupertypes, setFilterSupertypes] = useState(new Set()); // supertype multi-select
@@ -1607,116 +1641,109 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, price
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-        {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: collection.length }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
-          <div key={s.label} style={{ flex: 1, minWidth: 120, background: "rgba(200,168,75,0.08)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 8, padding: "10px 14px" }}>
-            <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
-            <div style={{ fontSize: 20, fontWeight: "bold", color: "#c8a84b" }}>{s.value}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, text, type..." style={filterInputStyle} />
-        <select value={filterColor} onChange={e => setFilterColor(e.target.value)} style={filterInputStyle}>
-          <option value="all">All Colors</option>
-          <option value="W">White</option><option value="U">Blue</option>
-          <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
-        </select>
-
-        {/* Supertype multi-select dropdown */}
-        <div ref={superMenuRef} style={{ position: "relative" }}>
-          <button onClick={() => setSuperMenuOpen(o => !o)} style={{
-            ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-            borderColor: filterSupertypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
-            color: filterSupertypes.size > 0 ? "#c8a84b" : "#888",
-          }}>
-            {filterSupertypes.size === 0 ? "Supertype" : [...filterSupertypes].join(", ")}
-            {filterSupertypes.size > 0 && (
-              <span onClick={e => { e.stopPropagation(); setFilterSupertypes(new Set()); }}
-                style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
-            )}
-            <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{superMenuOpen ? "▲" : "▼"}</span>
-          </button>
-          {superMenuOpen && (
-            <div style={{
-              position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
-              background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
-              borderRadius: 8, padding: 6, minWidth: 160, maxHeight: 280, overflowY: "auto",
-              boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-            }}>
-              {allSupertypes.map(t => {
-                const active = filterSupertypes.has(t);
-                return (
-                  <div key={t} onClick={() => setFilterSupertypes(prev => {
-                    const next = new Set(prev);
-                    active ? next.delete(t) : next.add(t);
-                    return next;
-                  })} style={{
-                    display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
-                    borderRadius: 5, cursor: "pointer", marginBottom: 2,
-                    background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
-                  }}>
-                    <div style={{
-                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                      border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
-                      background: active ? "rgba(200,168,75,0.3)" : "transparent",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
-                    <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {selectedCard ? (
+        <div style={{ marginTop: 10 }}>
+          <CardDetail
+            card={selectedCard}
+            onAdd={() => { }} // No-op, it's already in the collection (or we use updateQty)
+            onRemove={onRemove}
+            onQty={onQty}
+            inCollection={true}
+            onBack={() => setSelectedCard(null)}
+            decks={decks}
+            onToggleDeck={onToggleDeck}
+            collection={collection}
+            priceSource={priceSource}
+            ckPrices={ckPrices}
+          />
         </div>
-        {/* Type multi-select dropdown */}
-        <div ref={typeMenuRef} style={{ position: "relative" }}>
-          <button onClick={() => setTypeMenuOpen(o => !o)} style={{
-            ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-            borderColor: filterTypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
-            color: filterTypes.size > 0 ? "#c8a84b" : "#888",
-          }}>
-            {filterTypes.size === 0 ? "Type" : [...filterTypes].join(", ")}
-            {filterTypes.size > 0 && (
-              <span onClick={e => { e.stopPropagation(); setFilterTypes(new Set()); }}
-                style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
-            )}
-            <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{typeMenuOpen ? "▲" : "▼"}</span>
-          </button>
-          {typeMenuOpen && (
-            <div style={{
-              position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
-              background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
-              borderRadius: 8, padding: "8px 6px", minWidth: 200, maxHeight: 350, overflowY: "auto",
-              boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-            }}>
-              <div style={{ fontSize: 10, color: "#666", padding: "4px 8px", letterSpacing: 1 }}>KEYWORDS</div>
-              {allTypeKeywords.map(t => {
-                const active = filterTypes.has(t);
-                return (
-                  <div key={t} onClick={() => setFilterTypes(prev => {
-                    const next = new Set(prev);
-                    active ? next.delete(t) : next.add(t);
-                    return next;
-                  })} style={{
-                    display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
-                    borderRadius: 5, cursor: "pointer", marginBottom: 2,
-                    background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
-                  }}>
-                    <div style={{
-                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                      border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
-                      background: active ? "rgba(200,168,75,0.3)" : "transparent",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
-                    <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
-                  </div>
-                );
-              })}
-              {allTypePermutations.length > 0 && (
-                <>
-                  <div style={{ fontSize: 10, color: "#666", padding: "12px 8px 4px", letterSpacing: 1, borderTop: "1px solid rgba(255,255,255,0.05)", marginTop: 4 }}>PERMUTATIONS</div>
-                  {allTypePermutations.map(t => {
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+            {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: collection.length }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
+              <div key={s.label} style={{ flex: 1, minWidth: 120, background: "rgba(200,168,75,0.08)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 8, padding: "10px 14px" }}>
+                <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
+                <div style={{ fontSize: 20, fontWeight: "bold", color: "#c8a84b" }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, text, type..." style={filterInputStyle} />
+            <select value={filterColor} onChange={e => setFilterColor(e.target.value)} style={filterInputStyle}>
+              <option value="all">All Colors</option>
+              <option value="W">White</option><option value="U">Blue</option>
+              <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
+            </select>
+
+            {/* Supertype multi-select dropdown */}
+            <div ref={superMenuRef} style={{ position: "relative" }}>
+              <button onClick={() => setSuperMenuOpen(o => !o)} style={{
+                ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+                borderColor: filterSupertypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
+                color: filterSupertypes.size > 0 ? "#c8a84b" : "#888",
+              }}>
+                {filterSupertypes.size === 0 ? "Supertype" : [...filterSupertypes].join(", ")}
+                {filterSupertypes.size > 0 && (
+                  <span onClick={e => { e.stopPropagation(); setFilterSupertypes(new Set()); }}
+                    style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
+                )}
+                <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{superMenuOpen ? "▲" : "▼"}</span>
+              </button>
+              {superMenuOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
+                  background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
+                  borderRadius: 8, padding: 6, minWidth: 160, maxHeight: 280, overflowY: "auto",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                }}>
+                  {allSupertypes.map(t => {
+                    const active = filterSupertypes.has(t);
+                    return (
+                      <div key={t} onClick={() => setFilterSupertypes(prev => {
+                        const next = new Set(prev);
+                        active ? next.delete(t) : next.add(t);
+                        return next;
+                      })} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                        borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                        background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                      }}>
+                        <div style={{
+                          width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                          border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                          background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                        <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            {/* Type multi-select dropdown */}
+            <div ref={typeMenuRef} style={{ position: "relative" }}>
+              <button onClick={() => setTypeMenuOpen(o => !o)} style={{
+                ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+                borderColor: filterTypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
+                color: filterTypes.size > 0 ? "#c8a84b" : "#888",
+              }}>
+                {filterTypes.size === 0 ? "Type" : [...filterTypes].join(", ")}
+                {filterTypes.size > 0 && (
+                  <span onClick={e => { e.stopPropagation(); setFilterTypes(new Set()); }}
+                    style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
+                )}
+                <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{typeMenuOpen ? "▲" : "▼"}</span>
+              </button>
+              {typeMenuOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
+                  background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
+                  borderRadius: 8, padding: "8px 6px", minWidth: 200, maxHeight: 350, overflowY: "auto",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                }}>
+                  <div style={{ fontSize: 10, color: "#666", padding: "4px 8px", letterSpacing: 1 }}>KEYWORDS</div>
+                  {allTypeKeywords.map(t => {
                     const active = filterTypes.has(t);
                     return (
                       <div key={t} onClick={() => setFilterTypes(prev => {
@@ -1738,54 +1765,80 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, price
                       </div>
                     );
                   })}
-                </>
+                  {allTypePermutations.length > 0 && (
+                    <>
+                      <div style={{ fontSize: 10, color: "#666", padding: "12px 8px 4px", letterSpacing: 1, borderTop: "1px solid rgba(255,255,255,0.05)", marginTop: 4 }}>PERMUTATIONS</div>
+                      {allTypePermutations.map(t => {
+                        const active = filterTypes.has(t);
+                        return (
+                          <div key={t} onClick={() => setFilterTypes(prev => {
+                            const next = new Set(prev);
+                            active ? next.delete(t) : next.add(t);
+                            return next;
+                          })} style={{
+                            display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                            borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                            background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                          }}>
+                            <div style={{
+                              width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                              border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                              background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                            }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                            <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
-        {/* Subtype autocomplete */}
-        <div style={{ position: "relative" }}>
-          <input
-            id="subtype-search"
-            value={filterSubtype}
-            onChange={e => setFilterSubtype(e.target.value)}
-            placeholder="Subtype..."
-            list="subtype-list"
-            style={{ ...filterInputStyle, minWidth: 140 }}
-          />
-          <datalist id="subtype-list">
-            {allSubtypes
-              .filter(s => !filterSubtype || s.toLowerCase().startsWith(filterSubtype.toLowerCase()))
-              .map(s => <option key={s} value={s} />)}
-          </datalist>
-        </div>
-        <input value={filterMV} onChange={e => setFilterMV(e.target.value)} placeholder="Mana Value" type="number" min="0" style={{ ...filterInputStyle, width: 100 }} />
-        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={filterInputStyle}>
-          <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
-          <option value="color">Sort: Color</option><option value="mv">Sort: Mana Value</option>
-        </select>
-        {/* View mode toggle */}
-        <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", marginLeft: "auto", flexShrink: 0 }}>
-          {[{ id: "all", label: "All Editions" }, { id: "unique", label: "Unique Names" }].map(v => (
-            <button key={v.id} onClick={() => setViewMode(v.id)} style={{
-              padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit",
-              background: viewMode === v.id ? "rgba(200,168,75,0.2)" : "rgba(255,255,255,0.03)",
-              color: viewMode === v.id ? "#c8a84b" : "#666",
-              fontWeight: viewMode === v.id ? "bold" : "normal",
-            }}>{v.label}</button>
-          ))}
-        </div>
-      </div>
-      {collection.length === 0
-        ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
-        : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} priceSource={priceSource} ckPrices={ckPrices} />)}</div>
-      }
+            {/* Subtype autocomplete */}
+            <div style={{ position: "relative" }}>
+              <input
+                id="subtype-search"
+                value={filterSubtype}
+                onChange={e => setFilterSubtype(e.target.value)}
+                placeholder="Subtype..."
+                list="subtype-list"
+                style={{ ...filterInputStyle, minWidth: 140 }}
+              />
+              <datalist id="subtype-list">
+                {allSubtypes
+                  .filter(s => !filterSubtype || s.toLowerCase().startsWith(filterSubtype.toLowerCase()))
+                  .map(s => <option key={s} value={s} />)}
+              </datalist>
+            </div>
+            <input value={filterMV} onChange={e => setFilterMV(e.target.value)} placeholder="Mana Value" type="number" min="0" style={{ ...filterInputStyle, width: 100 }} />
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={filterInputStyle}>
+              <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
+              <option value="color">Sort: Color</option><option value="mv">Sort: Mana Value</option>
+            </select>
+            {/* View mode toggle */}
+            <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", marginLeft: "auto", flexShrink: 0 }}>
+              {[{ id: "all", label: "All Editions" }, { id: "unique", label: "Unique Names" }].map(v => (
+                <button key={v.id} onClick={() => setViewMode(v.id)} style={{
+                  padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                  background: viewMode === v.id ? "rgba(200,168,75,0.2)" : "rgba(255,255,255,0.03)",
+                  color: viewMode === v.id ? "#c8a84b" : "#666",
+                  fontWeight: viewMode === v.id ? "bold" : "normal",
+                }}>{v.label}</button>
+              ))}
+            </div>
+          </div>
+          {collection.length === 0
+            ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
+            : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onSelect={setSelectedCard} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} priceSource={priceSource} ckPrices={ckPrices} />)}</div>
+          }
+        </>
+      )}
     </div>
   );
 }
 
-function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly, priceSource, ckPrices }) {
-  const [expanded, setExpanded] = useState(false);
+function CollectionRow({ card, onSelect, onRemove, onQty, decks, onToggleDeck, readOnly, priceSource, ckPrices }) {
   const [deckSelectorOpen, setDeckSelectorOpen] = useState(false);
   const img = getImage(card);
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
@@ -1795,7 +1848,7 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly, p
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, borderLeft: `3px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`, position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer" }}
-        onClick={() => setExpanded(!expanded)}>
+        onClick={() => onSelect(card)}>
         {/* Image + name: tooltip fires here only, not on buttons */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}
           onMouseEnter={e => { if (!e.target.closest("button")) handleMouseEnter(card, e); }}
@@ -1857,52 +1910,6 @@ function CollectionRow({ card, onRemove, onQty, decks, onToggleDeck, readOnly, p
         <div className="coll-row-subtotal" style={{ color: "#888", fontSize: 13, minWidth: 60, textAlign: "right" }}>${(getPrice(card, priceSource, ckPrices) * (card.qty || 1)).toFixed(2)}</div>
         {!readOnly && <button onClick={e => { e.stopPropagation(); onRemove(card.id); }} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>✕</button>}
       </div>
-      {expanded && (
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-          {readOnly && card._editionCards?.length > 0 ? (
-            // Two-column layout: editions list left, oracle text right
-            <div style={{ display: "flex", gap: 0 }}>
-              {/* Editions panel */}
-              <div style={{ minWidth: 220, maxWidth: 260, padding: "10px 14px", borderRight: "1px solid rgba(255,255,255,0.05)" }}>
-                <div style={{ fontSize: 10, letterSpacing: 1, color: "#666", marginBottom: 8 }}>OWNED EDITIONS</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  {card._editionCards.map(ed => (
-                    <div key={ed.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px", background: "rgba(255,255,255,0.03)", borderRadius: 5 }}>
-                      {getImage(ed) && <img src={getImage(ed)} style={{ width: 28, borderRadius: 3, flexShrink: 0 }} alt="" />}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {ed.set_name} {ed.isFoil && <span style={{ color: "#a855f7", fontSize: 9 }}>✦</span>}
-                        </div>
-                        <div style={{ fontSize: 10, color: "#666" }}>#{ed.collector_number}</div>
-                      </div>
-                      <span style={{ fontSize: 12, color: "#c8a84b", flexShrink: 0 }}>{ed.qty || 1}×</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {/* Oracle text */}
-              <div style={{ flex: 1, padding: "10px 14px" }}>
-                <div style={{ fontSize: 13, color: "#d0c8b8", whiteSpace: "pre-wrap", fontStyle: "italic", lineHeight: 1.6 }}>{getOracleText(card)}</div>
-                {card.flavor_text && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginTop: 6 }}>"{card.flavor_text}"</div>}
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                  <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
-                  <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
-                </div>
-              </div>
-            </div>
-          ) : (
-            // Normal single-column expanded view
-            <div style={{ padding: "0 14px 14px 66px" }}>
-              <div style={{ paddingTop: 10, fontSize: 13, color: "#d0c8b8", whiteSpace: "pre-wrap", fontStyle: "italic", lineHeight: 1.6 }}>{getOracleText(card)}</div>
-              {card.flavor_text && <div style={{ fontSize: 12, color: "#555", fontStyle: "italic", marginTop: 6 }}>"{card.flavor_text}"</div>}
-              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <a href={tcgLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#2a6a99")}>TCGPlayer</a>
-                <a href={ckLink(card)} target="_blank" rel="noreferrer" style={linkStyle("#8b6914")}>Card Kingdom</a>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
