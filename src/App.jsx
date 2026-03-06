@@ -720,7 +720,7 @@ function App() {
       }
 
       setSyncStatus("idle");
-      setSyncMsg(`Loaded ${normalizedCards.length} cards`);
+      setSyncMsg(`Loaded ${new Set(normalizedCards.map(c => c.name).filter(Boolean)).size} unique cards`);
     } catch (e) {
       setSyncStatus("error");
       setSyncMsg(`Load failed: ${e.message}`);
@@ -1683,7 +1683,7 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, price
         ) : (
           <>
             <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-              {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: collection.length }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
+              {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: new Set(collection.map(c => c.name).filter(Boolean)).size }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
                 <div key={s.label} style={{ flex: 1, minWidth: 120, background: "rgba(200,168,75,0.08)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 8, padding: "10px 14px" }}>
                   <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
                   <div style={{ fontSize: 20, fontWeight: "bold", color: "#c8a84b" }}>{s.value}</div>
