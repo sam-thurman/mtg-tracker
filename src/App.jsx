@@ -1553,6 +1553,7 @@ function RemoveFromCollectionPrompt({ cardName, onConfirm, onCancel }) {
 // ─── Collection Tab ───────────────────────────────────────────────────────────
 function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, priceSource, ckPrices }) {
   const [selectedCard, setSelectedCard] = useState(null);
+  const [collectionView, setCollectionView] = useState("cards"); // "cards" | "combos"
   const [search, setSearch] = useState("");
   const [filterColor, setFilterColor] = useState("all");
   const [filterSupertypes, setFilterSupertypes] = useState(new Set()); // supertype multi-select
@@ -1641,197 +1642,221 @@ function CollectionTab({ collection, onRemove, onQty, decks, onToggleDeck, price
 
   return (
     <div>
-      {selectedCard ? (
-        <div style={{ marginTop: 10 }}>
-          <CardDetail
-            card={selectedCard}
-            onAdd={() => { }} // No-op, it's already in the collection (or we use updateQty)
-            onRemove={onRemove}
-            onQty={onQty}
-            inCollection={true}
-            onBack={() => setSelectedCard(null)}
-            decks={decks}
-            onToggleDeck={onToggleDeck}
-            collection={collection}
-            priceSource={priceSource}
-            ckPrices={ckPrices}
-          />
+      {/* Sub-tab navigation: Cards / Combos */}
+      {!selectedCard && (
+        <div style={{ display: "flex", gap: 0, marginBottom: 20, borderBottom: "1px solid var(--border)", background: "var(--surface)" }}>
+          {[{ id: "cards", label: "🃏 Cards" }, { id: "combos", label: "⚡ Combos" }].map(v => (
+            <button key={v.id} onClick={() => { setCollectionView(v.id); setSelectedCard(null); }} style={{
+              padding: "10px 20px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "inherit",
+              background: collectionView === v.id ? "rgba(200,168,75,0.12)" : "transparent",
+              color: collectionView === v.id ? "#c8a84b" : "#888",
+              borderBottom: collectionView === v.id ? "2px solid #c8a84b" : "2px solid transparent",
+              letterSpacing: 0.5, transition: "all 0.2s",
+            }}>{v.label}</button>
+          ))}
         </div>
-      ) : (
-        <>
-          <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-            {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: collection.length }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
-              <div key={s.label} style={{ flex: 1, minWidth: 120, background: "rgba(200,168,75,0.08)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 8, padding: "10px 14px" }}>
-                <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
-                <div style={{ fontSize: 20, fontWeight: "bold", color: "#c8a84b" }}>{s.value}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, text, type..." style={filterInputStyle} />
-            <select value={filterColor} onChange={e => setFilterColor(e.target.value)} style={filterInputStyle}>
-              <option value="all">All Colors</option>
-              <option value="W">White</option><option value="U">Blue</option>
-              <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
-            </select>
+      )}
 
-            {/* Supertype multi-select dropdown */}
-            <div ref={superMenuRef} style={{ position: "relative" }}>
-              <button onClick={() => setSuperMenuOpen(o => !o)} style={{
-                ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-                borderColor: filterSupertypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
-                color: filterSupertypes.size > 0 ? "#c8a84b" : "#888",
-              }}>
-                {filterSupertypes.size === 0 ? "Supertype" : [...filterSupertypes].join(", ")}
-                {filterSupertypes.size > 0 && (
-                  <span onClick={e => { e.stopPropagation(); setFilterSupertypes(new Set()); }}
-                    style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
-                )}
-                <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{superMenuOpen ? "▲" : "▼"}</span>
-              </button>
-              {superMenuOpen && (
-                <div style={{
-                  position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
-                  background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
-                  borderRadius: 8, padding: 6, minWidth: 160, maxHeight: 280, overflowY: "auto",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-                }}>
-                  {allSupertypes.map(t => {
-                    const active = filterSupertypes.has(t);
-                    return (
-                      <div key={t} onClick={() => setFilterSupertypes(prev => {
-                        const next = new Set(prev);
-                        active ? next.delete(t) : next.add(t);
-                        return next;
-                      })} style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
-                        borderRadius: 5, cursor: "pointer", marginBottom: 2,
-                        background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
-                      }}>
-                        <div style={{
-                          width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                          border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
-                          background: active ? "rgba(200,168,75,0.3)" : "transparent",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                        }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
-                        <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
-                      </div>
-                    );
-                  })}
+      {/* Combos sub-tab */}
+      {!selectedCard && collectionView === "combos" && (
+        <CollectionCombos collection={collection} />
+      )}
+
+      {/* Cards sub-tab (existing card list + detail) */}
+      {(selectedCard || collectionView === "cards") && (
+        <>{selectedCard ? (
+          <div style={{ marginTop: 10 }}>
+            <CardDetail
+              card={selectedCard}
+              onAdd={() => { }} // No-op, it's already in the collection (or we use updateQty)
+              onRemove={onRemove}
+              onQty={onQty}
+              inCollection={true}
+              onBack={() => setSelectedCard(null)}
+              decks={decks}
+              onToggleDeck={onToggleDeck}
+              collection={collection}
+              priceSource={priceSource}
+              ckPrices={ckPrices}
+            />
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+              {[{ label: "Total Cards", value: collection.reduce((s, c) => s + (c.qty || 1), 0) }, { label: "Unique Cards", value: collection.length }, { label: "Total Value", value: `$${totalValue.toFixed(2)}` }].map(s => (
+                <div key={s.label} style={{ flex: 1, minWidth: 120, background: "rgba(200,168,75,0.08)", border: "1px solid rgba(200,168,75,0.2)", borderRadius: 8, padding: "10px 14px" }}>
+                  <div style={{ fontSize: 11, color: "#888", letterSpacing: 1 }}>{s.label.toUpperCase()}</div>
+                  <div style={{ fontSize: 20, fontWeight: "bold", color: "#c8a84b" }}>{s.value}</div>
                 </div>
-              )}
-            </div>
-            {/* Type multi-select dropdown */}
-            <div ref={typeMenuRef} style={{ position: "relative" }}>
-              <button onClick={() => setTypeMenuOpen(o => !o)} style={{
-                ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-                borderColor: filterTypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
-                color: filterTypes.size > 0 ? "#c8a84b" : "#888",
-              }}>
-                {filterTypes.size === 0 ? "Type" : [...filterTypes].join(", ")}
-                {filterTypes.size > 0 && (
-                  <span onClick={e => { e.stopPropagation(); setFilterTypes(new Set()); }}
-                    style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
-                )}
-                <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{typeMenuOpen ? "▲" : "▼"}</span>
-              </button>
-              {typeMenuOpen && (
-                <div style={{
-                  position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
-                  background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
-                  borderRadius: 8, padding: "8px 6px", minWidth: 200, maxHeight: 350, overflowY: "auto",
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
-                }}>
-                  <div style={{ fontSize: 10, color: "#666", padding: "4px 8px", letterSpacing: 1 }}>KEYWORDS</div>
-                  {allTypeKeywords.map(t => {
-                    const active = filterTypes.has(t);
-                    return (
-                      <div key={t} onClick={() => setFilterTypes(prev => {
-                        const next = new Set(prev);
-                        active ? next.delete(t) : next.add(t);
-                        return next;
-                      })} style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
-                        borderRadius: 5, cursor: "pointer", marginBottom: 2,
-                        background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
-                      }}>
-                        <div style={{
-                          width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                          border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
-                          background: active ? "rgba(200,168,75,0.3)" : "transparent",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                        }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
-                        <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
-                      </div>
-                    );
-                  })}
-                  {allTypePermutations.length > 0 && (
-                    <>
-                      <div style={{ fontSize: 10, color: "#666", padding: "12px 8px 4px", letterSpacing: 1, borderTop: "1px solid rgba(255,255,255,0.05)", marginTop: 4 }}>PERMUTATIONS</div>
-                      {allTypePermutations.map(t => {
-                        const active = filterTypes.has(t);
-                        return (
-                          <div key={t} onClick={() => setFilterTypes(prev => {
-                            const next = new Set(prev);
-                            active ? next.delete(t) : next.add(t);
-                            return next;
-                          })} style={{
-                            display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
-                            borderRadius: 5, cursor: "pointer", marginBottom: 2,
-                            background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
-                          }}>
-                            <div style={{
-                              width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                              border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
-                              background: active ? "rgba(200,168,75,0.3)" : "transparent",
-                              display: "flex", alignItems: "center", justifyContent: "center",
-                            }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
-                            <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-            {/* Subtype autocomplete */}
-            <div style={{ position: "relative" }}>
-              <input
-                id="subtype-search"
-                value={filterSubtype}
-                onChange={e => setFilterSubtype(e.target.value)}
-                placeholder="Subtype..."
-                list="subtype-list"
-                style={{ ...filterInputStyle, minWidth: 140 }}
-              />
-              <datalist id="subtype-list">
-                {allSubtypes
-                  .filter(s => !filterSubtype || s.toLowerCase().startsWith(filterSubtype.toLowerCase()))
-                  .map(s => <option key={s} value={s} />)}
-              </datalist>
-            </div>
-            <input value={filterMV} onChange={e => setFilterMV(e.target.value)} placeholder="Mana Value" type="number" min="0" style={{ ...filterInputStyle, width: 100 }} />
-            <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={filterInputStyle}>
-              <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
-              <option value="color">Sort: Color</option><option value="mv">Sort: Mana Value</option>
-            </select>
-            {/* View mode toggle */}
-            <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", marginLeft: "auto", flexShrink: 0 }}>
-              {[{ id: "all", label: "All Editions" }, { id: "unique", label: "Unique Names" }].map(v => (
-                <button key={v.id} onClick={() => setViewMode(v.id)} style={{
-                  padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit",
-                  background: viewMode === v.id ? "rgba(200,168,75,0.2)" : "rgba(255,255,255,0.03)",
-                  color: viewMode === v.id ? "#c8a84b" : "#666",
-                  fontWeight: viewMode === v.id ? "bold" : "normal",
-                }}>{v.label}</button>
               ))}
             </div>
-          </div>
-          {collection.length === 0
-            ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
-            : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onSelect={setSelectedCard} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} priceSource={priceSource} ckPrices={ckPrices} />)}</div>
-          }
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, text, type..." style={filterInputStyle} />
+              <select value={filterColor} onChange={e => setFilterColor(e.target.value)} style={filterInputStyle}>
+                <option value="all">All Colors</option>
+                <option value="W">White</option><option value="U">Blue</option>
+                <option value="B">Black</option><option value="R">Red</option><option value="G">Green</option>
+              </select>
+
+              {/* Supertype multi-select dropdown */}
+              <div ref={superMenuRef} style={{ position: "relative" }}>
+                <button onClick={() => setSuperMenuOpen(o => !o)} style={{
+                  ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+                  borderColor: filterSupertypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
+                  color: filterSupertypes.size > 0 ? "#c8a84b" : "#888",
+                }}>
+                  {filterSupertypes.size === 0 ? "Supertype" : [...filterSupertypes].join(", ")}
+                  {filterSupertypes.size > 0 && (
+                    <span onClick={e => { e.stopPropagation(); setFilterSupertypes(new Set()); }}
+                      style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
+                  )}
+                  <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{superMenuOpen ? "▲" : "▼"}</span>
+                </button>
+                {superMenuOpen && (
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
+                    background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
+                    borderRadius: 8, padding: 6, minWidth: 160, maxHeight: 280, overflowY: "auto",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                  }}>
+                    {allSupertypes.map(t => {
+                      const active = filterSupertypes.has(t);
+                      return (
+                        <div key={t} onClick={() => setFilterSupertypes(prev => {
+                          const next = new Set(prev);
+                          active ? next.delete(t) : next.add(t);
+                          return next;
+                        })} style={{
+                          display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                          borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                          background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                        }}>
+                          <div style={{
+                            width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                            border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                            background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                          <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {/* Type multi-select dropdown */}
+              <div ref={typeMenuRef} style={{ position: "relative" }}>
+                <button onClick={() => setTypeMenuOpen(o => !o)} style={{
+                  ...filterInputStyle, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+                  borderColor: filterTypes.size > 0 ? "rgba(200,168,75,0.5)" : undefined,
+                  color: filterTypes.size > 0 ? "#c8a84b" : "#888",
+                }}>
+                  {filterTypes.size === 0 ? "Type" : [...filterTypes].join(", ")}
+                  {filterTypes.size > 0 && (
+                    <span onClick={e => { e.stopPropagation(); setFilterTypes(new Set()); }}
+                      style={{ marginLeft: 4, color: "#e57373", fontWeight: "bold", lineHeight: 1 }}>×</span>
+                  )}
+                  <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.5 }}>{typeMenuOpen ? "▲" : "▼"}</span>
+                </button>
+                {typeMenuOpen && (
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 200,
+                    background: "#1a1a20", border: "1px solid rgba(200,168,75,0.2)",
+                    borderRadius: 8, padding: "8px 6px", minWidth: 200, maxHeight: 350, overflowY: "auto",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                  }}>
+                    <div style={{ fontSize: 10, color: "#666", padding: "4px 8px", letterSpacing: 1 }}>KEYWORDS</div>
+                    {allTypeKeywords.map(t => {
+                      const active = filterTypes.has(t);
+                      return (
+                        <div key={t} onClick={() => setFilterTypes(prev => {
+                          const next = new Set(prev);
+                          active ? next.delete(t) : next.add(t);
+                          return next;
+                        })} style={{
+                          display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                          borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                          background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                        }}>
+                          <div style={{
+                            width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                            border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                            background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                          <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                        </div>
+                      );
+                    })}
+                    {allTypePermutations.length > 0 && (
+                      <>
+                        <div style={{ fontSize: 10, color: "#666", padding: "12px 8px 4px", letterSpacing: 1, borderTop: "1px solid rgba(255,255,255,0.05)", marginTop: 4 }}>PERMUTATIONS</div>
+                        {allTypePermutations.map(t => {
+                          const active = filterTypes.has(t);
+                          return (
+                            <div key={t} onClick={() => setFilterTypes(prev => {
+                              const next = new Set(prev);
+                              active ? next.delete(t) : next.add(t);
+                              return next;
+                            })} style={{
+                              display: "flex", alignItems: "center", gap: 8, padding: "5px 8px",
+                              borderRadius: 5, cursor: "pointer", marginBottom: 2,
+                              background: active ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.02)",
+                            }}>
+                              <div style={{
+                                width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                                border: `1.5px solid ${active ? "#c8a84b" : "rgba(255,255,255,0.2)"}`,
+                                background: active ? "rgba(200,168,75,0.3)" : "transparent",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                              }}>{active && <span style={{ fontSize: 9, color: "#c8a84b" }}>✓</span>}</div>
+                              <span style={{ fontSize: 13, color: active ? "#c8a84b" : "#e8e0d0" }}>{t}</span>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              {/* Subtype autocomplete */}
+              <div style={{ position: "relative" }}>
+                <input
+                  id="subtype-search"
+                  value={filterSubtype}
+                  onChange={e => setFilterSubtype(e.target.value)}
+                  placeholder="Subtype..."
+                  list="subtype-list"
+                  style={{ ...filterInputStyle, minWidth: 140 }}
+                />
+                <datalist id="subtype-list">
+                  {allSubtypes
+                    .filter(s => !filterSubtype || s.toLowerCase().startsWith(filterSubtype.toLowerCase()))
+                    .map(s => <option key={s} value={s} />)}
+                </datalist>
+              </div>
+              <input value={filterMV} onChange={e => setFilterMV(e.target.value)} placeholder="Mana Value" type="number" min="0" style={{ ...filterInputStyle, width: 100 }} />
+              <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={filterInputStyle}>
+                <option value="name">Sort: Name</option><option value="price">Sort: Price</option>
+                <option value="color">Sort: Color</option><option value="mv">Sort: Mana Value</option>
+              </select>
+              {/* View mode toggle */}
+              <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", marginLeft: "auto", flexShrink: 0 }}>
+                {[{ id: "all", label: "All Editions" }, { id: "unique", label: "Unique Names" }].map(v => (
+                  <button key={v.id} onClick={() => setViewMode(v.id)} style={{
+                    padding: "6px 12px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                    background: viewMode === v.id ? "rgba(200,168,75,0.2)" : "rgba(255,255,255,0.03)",
+                    color: viewMode === v.id ? "#c8a84b" : "#666",
+                    fontWeight: viewMode === v.id ? "bold" : "normal",
+                  }}>{v.label}</button>
+                ))}
+              </div>
+            </div>
+            {collection.length === 0
+              ? <div style={{ textAlign: "center", padding: 60, color: "#555" }}><div style={{ fontSize: 48, marginBottom: 12 }}>📜</div><div>Your collection is empty.</div></div>
+              : <div style={{ display: "grid", gap: 4 }}>{displayCards.map(card => <CollectionRow key={card.id} card={card} onSelect={setSelectedCard} onRemove={onRemove} onQty={onQty} decks={decks} onToggleDeck={onToggleDeck} readOnly={viewMode === "unique"} priceSource={priceSource} ckPrices={ckPrices} />)}</div>
+            }
+          </>
+        )}
         </>
       )}
     </div>
@@ -2526,6 +2551,159 @@ function DeckCombos({ deckCards, collection, deckColorIdentity: propDeckCI, comm
           </div>
         ))
       }
+      <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
+    </div>
+  );
+}
+
+// ─── Collection Combo Finder ─────────────────────────────────────────────────
+function CollectionCombos({ collection }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | done | error
+  const [errorMsg, setErrorMsg] = useState("");
+  const [combos, setCombos] = useState([]);
+  const [expanded, setExpanded] = useState({});
+  const [scanned, setScanned] = useState(0);
+  const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+
+  const collectionNames = new Set((collection || []).map(c => c.name?.toLowerCase()));
+
+  const findCombos = async () => {
+    if (collection.length === 0) return;
+    setStatus("loading");
+    setErrorMsg("");
+    setCombos([]);
+    setScanned(0);
+    try {
+      const names = [...new Set(collection.map(c => c.name).filter(Boolean))];
+      let done = 0;
+      const batchResults = await pool(names.map(name => async () => {
+        const result = await fetchCombosForCard(name);
+        setScanned(++done);
+        return result;
+      }), 3);
+      // Deduplicate by variant id
+      const seen = new Set();
+      const all = [];
+      batchResults.flat().forEach(v => { if (!seen.has(v.id)) { seen.add(v.id); all.push(v); } });
+      // Score: owned = how many combo cards are in the collection
+      const scored = all.map(v => {
+        const comboNames = v.uses.map(u => u.card.name.toLowerCase());
+        const owned = comboNames.filter(n => collectionNames.has(n)).length;
+        return { ...v, _owned: owned, _total: comboNames.length };
+      });
+      // Keep only fully-owned combos
+      const fullOwned = scored.filter(v => v._owned === v._total);
+      fullOwned.sort((a, b) => b.popularity - a.popularity);
+      setCombos(fullOwned);
+      setStatus("done");
+    } catch (e) {
+      console.error("Collection combo fetch error:", e);
+      setErrorMsg(e.message);
+      setStatus("error");
+    }
+  };
+
+  if (status === "idle") return (
+    <div style={{ textAlign: "center", padding: "40px 20px" }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>⚡</div>
+      <div style={{ color: "#888", fontSize: 14, marginBottom: 8 }}>Find combos you can execute using only cards in your collection</div>
+      <div style={{ color: "#555", fontSize: 12, marginBottom: 20 }}>Scans every card via Commander Spellbook — may take a minute for large collections</div>
+      <button onClick={findCombos} style={btnStyle("#c8a84b", "#1a1200")} disabled={collection.length === 0}>Find My Combos</button>
+    </div>
+  );
+
+  if (status === "loading") {
+    const total = new Set(collection.map(c => c.name).filter(Boolean)).size;
+    const pct = total > 0 ? Math.round((scanned / total) * 100) : 0;
+    return (
+      <div style={{ textAlign: "center", padding: "40px 24px", color: "#c8a84b" }}>
+        <div style={{ fontSize: 22, marginBottom: 14 }}>⟳</div>
+        <div style={{ fontWeight: "bold", marginBottom: 4 }}>Scanning your collection for combos...</div>
+        <div style={{ fontSize: 13, color: "#888", marginBottom: 16 }}>{scanned.toLocaleString()} / {total.toLocaleString()} cards scanned</div>
+        <div style={{ background: "rgba(255,255,255,0.07)", borderRadius: 99, height: 6, maxWidth: 320, margin: "0 auto", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #c8a84b, #f0cc6e)", borderRadius: 99, transition: "width 0.3s ease" }} />
+        </div>
+        <div style={{ fontSize: 11, color: "#555", marginTop: 8 }}>{pct}%</div>
+      </div>
+    );
+  }
+
+  if (status === "error") return (
+    <div style={{ textAlign: "center", padding: 40, color: "#e57373" }}>
+      <div>Failed to fetch combos.</div>
+      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>{errorMsg}</div>
+      <button onClick={() => setStatus("idle")} style={{ marginTop: 12, background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", padding: "4px 12px", fontSize: 13 }}>Try again</button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13, color: "#888" }}>
+          <span style={{ color: "#4ade80" }}>{combos.length} fully-owned combo{combos.length !== 1 ? "s" : ""}</span> found in your collection
+        </div>
+        <button onClick={() => setStatus("idle")} style={{ marginLeft: "auto", background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#888", cursor: "pointer", fontSize: 12, padding: "4px 10px", fontFamily: "inherit" }}>↺ Rescan</button>
+      </div>
+
+      {combos.length === 0 && (
+        <div style={{ textAlign: "center", padding: 40, color: "#555" }}>No fully-owned combos found in your collection.</div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {combos.map(variant => {
+          const isOpen = expanded[variant.id];
+          return (
+            <div key={variant.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(74,222,128,0.2)", borderRadius: 8, overflow: "hidden" }}>
+              <div onClick={() => setExpanded(e => ({ ...e, [variant.id]: !e[variant.id] }))}
+                style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 14px", cursor: "pointer" }}>
+                {/* Card name chips */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, flex: 1 }}>
+                  {variant.uses.map(u => {
+                    const tooltipCard = { id: String(u.card.id), name: u.card.name, image_uris: { normal: u.card.imageUriFrontNormal } };
+                    return (
+                      <span key={u.card.id}
+                        onMouseEnter={e => handleMouseEnter(tooltipCard, e)}
+                        onMouseMove={e => handleMouseMove(tooltipCard, e)}
+                        onMouseLeave={handleMouseLeave}
+                        style={{ fontSize: 12, padding: "2px 7px", borderRadius: 4, cursor: "default", background: "rgba(74,222,128,0.12)", border: "1px solid rgba(74,222,128,0.3)", color: "#86efac" }}>
+                        ✓ {u.card.name}
+                      </span>
+                    );
+                  })}
+                </div>
+                {/* Produced effects */}
+                <div style={{ minWidth: 120, textAlign: "right" }}>
+                  {variant.produces.slice(0, 2).map(p => (
+                    <div key={p.feature.id} style={{ fontSize: 11, color: "#a855f7" }}>{p.feature.name}</div>
+                  ))}
+                  {variant.produces.length > 2 && <div style={{ fontSize: 10, color: "#666" }}>+{variant.produces.length - 2} more</div>}
+                </div>
+                <span style={{ color: "#555", fontSize: 12 }}>{isOpen ? "▲" : "▼"}</span>
+              </div>
+              {isOpen && (
+                <div style={{ padding: "0 14px 14px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+                  {variant.notablePrerequisites && (
+                    <div style={{ marginTop: 10, marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#888", letterSpacing: 1, marginBottom: 4 }}>PREREQUISITES</div>
+                      <div style={{ fontSize: 12, color: "#ffb74d", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{variant.notablePrerequisites}</div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontSize: 10, color: "#888", letterSpacing: 1, marginBottom: 4 }}>STEPS</div>
+                    <div style={{ fontSize: 12, color: "#d0c8b8", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{variant.description}</div>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                    {variant.produces.map(p => (
+                      <span key={p.feature.id} style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "rgba(168,85,247,0.15)", border: "1px solid rgba(168,85,247,0.3)", color: "#c084fc" }}>{p.feature.name}</span>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: "#555" }}>Popularity: {variant.popularity} · {variant._owned}/{variant._total} cards owned</div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
       <CardTooltip card={tooltip?.card} x={tooltip?.x} y={tooltip?.y} />
     </div>
   );
