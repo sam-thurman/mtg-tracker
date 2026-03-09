@@ -273,13 +273,18 @@ function normalizeCollection(cards) {
   return Array.from(map.values());
 }
 
+const WISHLIST_SENTINEL = "__wishlist__";
+
 function normalizeDecks(decks) {
   return decks.map(deck => ({
     ...deck,
     cards: deck.cards.map(c => ({
       ...c,
-      collectionId: c.collectionId.replace("-nonfoil", "")
+      // Don't mangle the sentinel or wishlist entries
+      collectionId: c.collectionId === WISHLIST_SENTINEL ? WISHLIST_SENTINEL : c.collectionId.replace("-nonfoil", "")
     })).reduce((acc, c) => {
+      // Wishlist cards are never merged — each wishlistCard blob is unique
+      if (c.collectionId === WISHLIST_SENTINEL) { acc.push(c); return acc; }
       const existing = acc.find(x => x.collectionId === c.collectionId);
       if (existing) {
         existing.qty = (existing.qty || 1) + (c.qty || 1);
@@ -882,7 +887,7 @@ function App() {
       <main className="app-main">
         {tab === "search" && <SearchTab onAdd={addToCollection} onRemove={removeFromCollection} onQty={updateQty} collection={collection} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
         {tab === "collection" && <CollectionTab collection={collection} onRemove={removeFromCollection} onQty={updateQty} decks={decks} onToggleDeck={toggleCardInDeck} priceSource={priceSource} ckPrices={ckPrices} />}
-        {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} priceSource={priceSource} ckPrices={ckPrices} />}
+        {tab === "decks" && <DecksTab decks={decks} setDecks={(fn) => { setDecks(fn); setTimeout(triggerSave, 0); }} collection={collection} priceSource={priceSource} ckPrices={ckPrices} onAddToCollection={addToCollection} />}
         {tab === "combos" && <FindCombosTab collection={collection} />}
       </main>
     </div>
@@ -1941,7 +1946,7 @@ function CollectionRow({ card, onSelect, onRemove, onQty, decks, onToggleDeck, r
 }
 
 // ─── Decks Tab ────────────────────────────────────────────────────────────────
-function DecksTab({ decks, setDecks, collection, priceSource, ckPrices }) {
+function DecksTab({ decks, setDecks, collection, priceSource, ckPrices, onAddToCollection }) {
   const [activeDeck, setActiveDeck] = useState(null);
   const [newDeckName, setNewDeckName] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(null); // { id, name }
@@ -1969,7 +1974,11 @@ function DecksTab({ decks, setDecks, collection, priceSource, ckPrices }) {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {decks.map(dk => {
-            const deckTotal = dk.cards.reduce((s, c) => { const col = collection.find(col => col.id === c.collectionId); return s + (col ? getPrice(col, priceSource, ckPrices) * c.qty : 0); }, 0);
+            const deckTotal = dk.cards.reduce((s, c) => {
+              if (c.collectionId === WISHLIST_SENTINEL) return s + getPrice(c.wishlistCard || {}, priceSource, ckPrices) * (c.qty || 1);
+              const col = collection.find(col => col.id === c.collectionId);
+              return s + (col ? getPrice(col, priceSource, ckPrices) * (c.qty || 1) : 0);
+            }, 0);
             return (
               <div key={dk.id} onClick={() => setActiveDeck(dk.id)} style={{ padding: "10px 12px", borderRadius: 8, cursor: "pointer", background: activeDeck === dk.id ? "rgba(200,168,75,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${activeDeck === dk.id ? "rgba(200,168,75,0.3)" : "rgba(255,255,255,0.06)"}`, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
@@ -2009,8 +2018,29 @@ function DecksTab({ decks, setDecks, collection, priceSource, ckPrices }) {
           onQty={(cardId, delta) => updateDeck(currentDeck.id, dk => ({
             ...dk, cards: dk.cards.map(c => c.collectionId !== cardId ? c : { ...c, qty: Math.max(0, c.qty + delta) }).filter(c => c.qty > 0)
           }))}
+          onAddWishlist={(card, deckId) => {
+            // Add a card the user doesn't own as a wishlist entry in the deck
+            const id = deckId || currentDeck?.id;
+            if (!id) return;
+            updateDeck(id, dk => {
+              // If it's already in the collection, add as owned instead
+              const ownedCard = collection.find(c => c.name === card.name);
+              if (ownedCard) {
+                const existing = dk.cards.find(c => c.collectionId === ownedCard.id);
+                return existing
+                  ? { ...dk, cards: dk.cards.map(c => c.collectionId === ownedCard.id ? { ...c, qty: c.qty + 1 } : c) }
+                  : { ...dk, cards: [...dk.cards, { collectionId: ownedCard.id, qty: 1 }] };
+              }
+              // Otherwise add as wishlist entry
+              const existing = dk.cards.find(c => c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === card.id);
+              return existing
+                ? { ...dk, cards: dk.cards.map(c => (c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === card.id) ? { ...c, qty: c.qty + 1 } : c) }
+                : { ...dk, cards: [...dk.cards, { collectionId: WISHLIST_SENTINEL, wishlistCard: card, qty: 1 }] };
+            });
+          }}
           priceSource={priceSource}
           ckPrices={ckPrices}
+          onAddToCollection={onAddToCollection}
         />
       ) : (
         <div style={{ textAlign: "center", padding: 60, color: "#555" }}>
@@ -2111,17 +2141,36 @@ function CardTooltip({ card, x, y }) {
   );
 }
 
-function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceSource, ckPrices }) {
+function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, onAddWishlist, onAddToCollection, priceSource, ckPrices }) {
   const [search, setSearch] = useState("");
-  const [viewMode, setViewMode] = useState("deck"); // "deck" | "combos"
+  const [addPanelTab, setAddPanelTab] = useState("owned"); // "owned" | "search"
+  const [searchAllQuery, setSearchAllQuery] = useState("");
+  const [searchAllResults, setSearchAllResults] = useState([]);
+  const [searchAllLoading, setSearchAllLoading] = useState(false);
+  const [searchAllSuggestions, setSearchAllSuggestions] = useState([]);
+  const [showSearchAllSuggestions, setShowSearchAllSuggestions] = useState(false);
+  const [searchAllFocusIndex, setSearchAllFocusIndex] = useState(-1);
+  const searchAllRef = useRef(null);
+  const [viewMode, setViewMode] = useState("deck");
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
-  const deckCards = deck.cards.map(c => ({ ...collection.find(col => col.id === c.collectionId), deckQty: c.qty })).filter(c => c.id);
+
+  // Merge owned + wishlist cards into deckCards
+  const deckCards = deck.cards.map(c => {
+    if (c.collectionId === WISHLIST_SENTINEL) {
+      return c.wishlistCard ? { ...c.wishlistCard, deckQty: c.qty, _isWishlist: true } : null;
+    }
+    const col = collection.find(col => col.id === c.collectionId);
+    return col ? { ...col, deckQty: c.qty } : null;
+  }).filter(Boolean);
+
   const totalCards = deck.cards.reduce((s, c) => s + c.qty, 0);
-  // Commander card — needed early for color identity computation
-  const commanderCard = deck.commander ? collection.find(c => c.id === deck.commander) : null;
-  // Color identity:
-  //   Commander format → use ONLY the commander's color_identity
-  //   Standard format  → union of all deck card color_identity arrays
+  const wishlistCount = deck.cards.filter(c => c.collectionId === WISHLIST_SENTINEL).length;
+
+  // Commander card — look up in deckCards so wishlist legendary creatures work as Commander
+  const commanderCard = deck.commander
+    ? (deckCards.find(c => c.id === deck.commander) || null)
+    : null;
+
   const deckColorIdentity = (() => {
     const s = new Set();
     if (deck.format === "Commander" && commanderCard) {
@@ -2131,6 +2180,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
     }
     return s;
   })();
+
   const totalValue = deckCards.reduce((s, c) => s + getPrice(c, priceSource, ckPrices) * (c.deckQty || 0), 0);
   const typeCounts = {};
   deckCards.forEach(c => {
@@ -2138,7 +2188,6 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
     typeCounts[t] = (typeCounts[t] || 0) + (c.deckQty || 0);
   });
 
-  // Group cards by their main-type permutation (e.g. "Artifact Creature")
   const groupedCards = {};
   deckCards.forEach(c => {
     const t = getTypePermutation(c.type_line);
@@ -2146,7 +2195,6 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
     groupedCards[t].push(c);
   });
 
-  // Sort groups by the predefined display order
   const sortedTypes = Object.keys(groupedCards).sort((a, b) => {
     const ia = TYPE_GROUP_ORDER.indexOf(a);
     const ib = TYPE_GROUP_ORDER.indexOf(b);
@@ -2155,20 +2203,88 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
     if (ib === -1) return -1;
     return ia - ib;
   });
-  const available = collection.filter(c => { const q = search.toLowerCase(); return !q || c.name.toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q); });
 
-  // Commander: cards in deck that are Legendary Creatures
+  const available = collection.filter(c => { const q = search.toLowerCase(); return !q || c.name.toLowerCase().includes(q) || (c.type_line || "").toLowerCase().includes(q); });
   const legendaryCreatures = deckCards.filter(c => (c.type_line || "").includes("Legendary") && (c.type_line || "").includes("Creature"));
+
+  // ── Search All autocomplete ──
+  useEffect(() => {
+    const handler = (e) => {
+      if (searchAllRef.current && !searchAllRef.current.contains(e.target)) setShowSearchAllSuggestions(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  useEffect(() => {
+    if (searchAllQuery.trim().length < 2) { setSearchAllSuggestions([]); setShowSearchAllSuggestions(false); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(searchAllQuery)}`);
+        if (res.ok) { const d = await res.json(); setSearchAllSuggestions(d.data || []); setShowSearchAllSuggestions(true); setSearchAllFocusIndex(-1); }
+      } catch { /* ignore */ }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchAllQuery]);
+
+  const runSearchAll = async (q) => {
+    const query = q || searchAllQuery;
+    if (!query.trim()) return;
+    setShowSearchAllSuggestions(false);
+    setSearchAllSuggestions([]);
+    setSearchAllLoading(true);
+    const cards = await searchCards(query);
+    const expanded = [];
+    cards.forEach(card => {
+      const hasNonFoil = card.finishes?.includes("nonfoil");
+      const hasFoil = card.finishes?.includes("foil");
+      if (hasNonFoil) expanded.push({ ...card, isFoil: false, id: card.id });
+      if (hasFoil) expanded.push({ ...card, isFoil: true, id: `${card.id}-foil` });
+      if (!hasNonFoil && !hasFoil) expanded.push(card);
+    });
+    setSearchAllResults(expanded);
+    setSearchAllLoading(false);
+  };
+
+  const handleSearchAllKeyDown = (e) => {
+    if (!showSearchAllSuggestions || searchAllSuggestions.length === 0) {
+      if (e.key === "Enter") runSearchAll();
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setSearchAllFocusIndex(i => Math.min(i + 1, searchAllSuggestions.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSearchAllFocusIndex(i => Math.max(i - 1, -1)); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (searchAllFocusIndex >= 0) {
+        const sel = searchAllSuggestions[searchAllFocusIndex];
+        setSearchAllQuery(sel); setShowSearchAllSuggestions(false);
+        setTimeout(() => runSearchAll(sel), 0);
+      } else { setShowSearchAllSuggestions(false); runSearchAll(); }
+    } else if (e.key === "Escape") setShowSearchAllSuggestions(false);
+  };
+
+  // Promote wishlist card to owned in collection + upgrade deck entry
+  const promoteWishlistCard = (wishlistCard) => {
+    if (onAddToCollection) onAddToCollection(wishlistCard);
+    onUpdate(dk => {
+      const entry = dk.cards.find(c => c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === wishlistCard.id);
+      const qty = entry?.qty || 1;
+      const filtered = dk.cards.filter(c => !(c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === wishlistCard.id));
+      return { ...dk, cards: [...filtered, { collectionId: wishlistCard.id, qty }] };
+    });
+  };
 
   return (
     <div>
-      {/* Deck header: name + stats + format picker */}
+      {/* Deck header */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, color: "#c8a84b", fontStyle: "italic" }}>{deck.name}</h2>
-        <div style={{ fontSize: 13, color: "#888" }}>{totalCards} cards · ${totalValue.toFixed(2)}</div>
+        <div style={{ fontSize: 13, color: "#888" }}>
+          {totalCards} cards · ${totalValue.toFixed(2)}
+          {wishlistCount > 0 && <span style={{ marginLeft: 8, fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 4, padding: "1px 7px" }}>🛒 {wishlistCount} wishlist</span>}
+        </div>
         <div style={{ fontSize: 12, color: "#666" }}>{Object.entries(typeCounts).map(([t, n]) => `${t}(${n})`).join(" · ")}</div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-          {/* View mode tabs */}
           {[{ id: "deck", label: "📋 Deck" }, { id: "combos", label: "⚡ Combos" }, ...(deck.format === "Commander" ? [{ id: "synergies", label: "🧬 Commander Synergies" }] : [])].map(v => (
             <button key={v.id} onClick={() => setViewMode(v.id)} style={{
               padding: "5px 12px", borderRadius: 6, border: "1px solid", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold",
@@ -2191,7 +2307,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
         </div>
       </div>
 
-      {/* Commander selector — only shown for Commander format */}
+      {/* Commander selector */}
       {deck.format === "Commander" && (
         <div style={{ marginBottom: 16, padding: "12px 16px", background: "rgba(138,43,226,0.08)", border: "1px solid rgba(138,43,226,0.25)", borderRadius: 10 }}>
           <div style={{ fontSize: 11, letterSpacing: 1, color: "#a855f7", marginBottom: 8 }}>COMMANDER</div>
@@ -2199,7 +2315,10 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               {getImage(commanderCard) && <img src={getImage(commanderCard)} style={{ width: 36, borderRadius: 4 }} alt="" />}
               <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: "bold", fontSize: 14, color: "var(--text)" }}>{commanderCard.name}</div>
+                <div style={{ fontWeight: "bold", fontSize: 14, color: "var(--text)" }}>
+                  {commanderCard.name}
+                  {commanderCard._isWishlist && <span style={{ marginLeft: 8, fontSize: 10, color: "#f59e0b" }}>🛒 wishlist</span>}
+                </div>
                 <div style={{ fontSize: 11, color: "#a855f7" }}>{commanderCard.type_line}</div>
               </div>
               <button onClick={() => onUpdate(dk => ({ ...dk, commander: "" }))} style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
@@ -2215,6 +2334,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
                       {getImage(card) && <img src={getImage(card)} style={{ width: 28, borderRadius: 3 }} alt="" />}
                       <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
                       <div style={{ fontSize: 11, color: "#888" }}>{card.type_line?.split("—")[0].trim()}</div>
+                      {card._isWishlist && <span style={{ fontSize: 10, color: "#f59e0b" }}>🛒</span>}
                       <span style={{ fontSize: 12, color: "#a855f7" }}>→ Set as Commander</span>
                     </button>
                   ))}
@@ -2226,12 +2346,14 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
           )}
         </div>
       )}
+
       {viewMode === "deck" ? (
         <div className="deck-editor-grid">
+          {/* Left: Deck Contents */}
           <div>
             <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>DECK CONTENTS</div>
             {deckCards.length === 0
-              ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection →</div>
+              ? <div style={{ color: "#555", fontSize: 13, padding: 16 }}>Add cards from your collection or search all →</div>
               : <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {sortedTypes.map(type => (
                   <div key={type}>
@@ -2241,26 +2363,61 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
                     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                       {groupedCards[type].map(card => {
                         const isCommander = deck.format === "Commander" && card.id === deck.commander;
+                        const isWishlist = card._isWishlist;
                         return (
-                          <div key={card.id}
+                          <div key={isWishlist ? `wish-${card.id}` : card.id}
                             onMouseEnter={e => handleMouseEnter(card, e)}
                             onMouseMove={e => handleMouseMove(card, e)}
                             onMouseLeave={handleMouseLeave}
                             style={{
                               display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
-                              background: isCommander ? "rgba(138,43,226,0.12)" : "rgba(255,255,255,0.03)",
+                              background: isCommander ? "rgba(138,43,226,0.12)" : isWishlist ? "rgba(245,158,11,0.06)" : "rgba(255,255,255,0.03)",
                               borderRadius: 6,
-                              borderLeft: isCommander ? "2px solid #a855f7" : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
+                              borderLeft: isCommander
+                                ? "2px solid #a855f7"
+                                : isWishlist
+                                  ? "2px dashed rgba(245,158,11,0.6)"
+                                  : `2px solid ${card.colors?.[0] ? COLOR_MAP[card.colors[0]] : "#555"}`,
                               cursor: "default",
                               position: "relative"
                             }}>
                             {isCommander && <span style={{ fontSize: 12, color: "#a855f7", marginRight: 2 }} title="Commander">★</span>}
-                            <div style={{ flex: 1, fontSize: 13, color: "var(--text)" }}>{card.name}</div>
+                            {isWishlist && <span style={{ fontSize: 11, color: "#f59e0b", marginRight: 2 }} title="Wishlist — not in your collection">🛒</span>}
+                            <div style={{ flex: 1, fontSize: 13, color: isWishlist ? "#f3c966" : "var(--text)" }}>{card.name}</div>
                             <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card, priceSource, ckPrices)}</div>
-                            <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
-                            <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
-                            <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
-                            <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                            {isWishlist ? (
+                              <>
+                                <button onClick={() => onUpdate(dk => ({
+                                  ...dk, cards: dk.cards.map(c =>
+                                    (c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === card.id)
+                                      ? { ...c, qty: Math.max(0, c.qty - 1) } : c
+                                  ).filter(c => c.qty > 0)
+                                }))} style={qtyBtn}>−</button>
+                                <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
+                                <button onClick={() => onUpdate(dk => ({
+                                  ...dk, cards: dk.cards.map(c =>
+                                    (c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === card.id)
+                                      ? { ...c, qty: c.qty + 1 } : c
+                                  )
+                                }))} style={qtyBtn}>+</button>
+                                <button
+                                  onClick={() => promoteWishlistCard(card)}
+                                  title="Add this card to your collection"
+                                  style={{ background: "rgba(200,168,75,0.12)", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 4, color: "#c8a84b", cursor: "pointer", fontSize: 10, padding: "2px 6px", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                                  + Collect
+                                </button>
+                                <button onClick={() => onUpdate(dk => ({
+                                  ...dk, cards: dk.cards.filter(c => !(c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === card.id))
+                                }))} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                              </>
+                            ) : (
+                              <>
+                                <button onClick={() => onQty(card.id, -1)} style={qtyBtn}>−</button>
+                                <span style={{ minWidth: 20, textAlign: "center", fontSize: 13 }}>{card.deckQty}</span>
+                                <button onClick={() => onQty(card.id, 1)} style={qtyBtn}>+</button>
+                                <button onClick={() => onRemove(card.id)} style={{ background: "none", border: "none", color: "#e57373", cursor: "pointer" }}>✕</button>
+                              </>
+                            )}
                           </div>
                         );
                       })}
@@ -2270,26 +2427,123 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
               </div>
             }
           </div>
+
+          {/* Right: Add panel with Owned / Search All tabs */}
           <div>
-            <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>ADD FROM COLLECTION</div>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter collection..." style={{ ...filterInputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
-            <div style={{ maxHeight: 400, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-              {available.map(card => {
-                const inDeck = deck.cards.find(c => c.collectionId === card.id);
-                return (
-                  <button key={card.id} onClick={() => onAdd(card.id)}
-                    onMouseEnter={e => handleMouseEnter(card, e)}
-                    onMouseMove={e => handleMouseMove(card, e)}
-                    onMouseLeave={handleMouseLeave}
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "var(--card-row-bg)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "var(--border)"}`, borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left" }}>
-                    <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
-                    <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
-                    {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
-                    <span style={{ fontSize: 13, color: "#c8a84b" }}>+</span>
-                  </button>
-                );
-              })}
+            <div style={{ display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", marginBottom: 8 }}>
+              {[{ id: "owned", label: "📚 Owned" }, { id: "search", label: "🔍 Search All" }].map(t => (
+                <button key={t.id} onClick={() => setAddPanelTab(t.id)} style={{
+                  flex: 1, padding: "7px 0", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold",
+                  background: addPanelTab === t.id ? "rgba(200,168,75,0.15)" : "rgba(255,255,255,0.03)",
+                  color: addPanelTab === t.id ? "#c8a84b" : "#666",
+                  borderBottom: addPanelTab === t.id ? "2px solid #c8a84b" : "2px solid transparent",
+                }}>{t.label}</button>
+              ))}
             </div>
+
+            {addPanelTab === "owned" ? (
+              <>
+                <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>ADD FROM COLLECTION</div>
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter collection..." style={{ ...filterInputStyle, width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
+                <div style={{ maxHeight: 400, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                  {available.map(card => {
+                    const inDeck = deck.cards.find(c => c.collectionId === card.id);
+                    return (
+                      <button key={card.id} onClick={() => onAdd(card.id)}
+                        onMouseEnter={e => handleMouseEnter(card, e)}
+                        onMouseMove={e => handleMouseMove(card, e)}
+                        onMouseLeave={handleMouseLeave}
+                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "var(--card-row-bg)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "var(--border)"}`, borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left" }}>
+                        <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
+                        <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
+                        {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
+                        <span style={{ fontSize: 13, color: "#c8a84b" }}>+</span>
+                      </button>
+                    );
+                  })}
+                  {available.length === 0 && <div style={{ color: "#555", fontSize: 13, padding: "12px 0" }}>No matching cards in your collection.</div>}
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, letterSpacing: 1, color: "#888", marginBottom: 6 }}>SEARCH ALL CARDS</div>
+                <div ref={searchAllRef} style={{ position: "relative", marginBottom: 8 }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      value={searchAllQuery}
+                      onChange={e => { setSearchAllQuery(e.target.value); setShowSearchAllSuggestions(true); }}
+                      onKeyDown={handleSearchAllKeyDown}
+                      onFocus={() => { if (searchAllQuery.trim().length >= 2) setShowSearchAllSuggestions(true); }}
+                      placeholder="Search any card..."
+                      style={{ ...filterInputStyle, flex: 1, boxSizing: "border-box" }}
+                    />
+                    <button onClick={() => runSearchAll()} style={{ ...btnStyle("rgba(200,168,75,0.2)", "#c8a84b"), border: "1px solid rgba(200,168,75,0.3)", padding: "0 14px", fontSize: 13 }}>Go</button>
+                  </div>
+                  {showSearchAllSuggestions && searchAllSuggestions.length > 0 && (
+                    <div style={{
+                      position: "absolute", top: "calc(100% + 4px)", left: 0, right: 56, zIndex: 1000,
+                      background: "#1a1a20", border: "1px solid rgba(200,168,75,0.3)", borderRadius: 8,
+                      boxShadow: "0 8px 32px rgba(0,0,0,0.8)", maxHeight: 240, overflowY: "auto", padding: "4px 0"
+                    }}>
+                      {searchAllSuggestions.map((sug, i) => (
+                        <div key={sug}
+                          onMouseDown={e => { e.preventDefault(); setSearchAllQuery(sug); setShowSearchAllSuggestions(false); setTimeout(() => runSearchAll(sug), 0); }}
+                          onMouseEnter={() => setSearchAllFocusIndex(i)}
+                          style={{ padding: "8px 14px", cursor: "pointer", fontSize: 14, background: i === searchAllFocusIndex ? "rgba(200,168,75,0.15)" : "transparent", color: i === searchAllFocusIndex ? "#c8a84b" : "var(--text)", fontFamily: "inherit" }}>
+                          {sug}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {searchAllLoading && <div style={{ color: "#c8a84b", fontSize: 13, padding: "8px 0" }}>⟳ Searching...</div>}
+                <div style={{ maxHeight: 380, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                  {searchAllResults.map(card => {
+                    const alreadyOwned = collection.some(c => c.id === card.id || c.name === card.name);
+                    const inDeckAsOwned = deck.cards.find(c => c.collectionId === card.id);
+                    const inDeckAsWishlist = deck.cards.find(c => c.collectionId === WISHLIST_SENTINEL && c.wishlistCard?.id === card.id);
+                    const inDeck = inDeckAsOwned || inDeckAsWishlist;
+                    return (
+                      <button key={card.id}
+                        onMouseEnter={e => handleMouseEnter(card, e)}
+                        onMouseMove={e => handleMouseMove(card, e)}
+                        onMouseLeave={handleMouseLeave}
+                        onClick={() => {
+                          if (alreadyOwned) {
+                            const ownedCard = collection.find(c => c.id === card.id || c.name === card.name);
+                            if (ownedCard) onAdd(ownedCard.id);
+                          } else {
+                            onAddWishlist(card);
+                          }
+                        }}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8, padding: "6px 10px",
+                          background: inDeck ? "rgba(200,168,75,0.08)" : "var(--card-row-bg)",
+                          border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "var(--border)"}`,
+                          borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left"
+                        }}>
+                        <div style={{ flex: 1, fontSize: 13 }}>
+                          {card.name}
+                          {card.isFoil && <span style={{ marginLeft: 6, fontSize: 10, color: "#a855f7" }}>✦ foil</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
+                        {alreadyOwned && <span style={{ fontSize: 10, color: "#4ade80", whiteSpace: "nowrap" }}>✓ owned</span>}
+                        {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
+                        <span style={{ fontSize: 11, color: alreadyOwned ? "#c8a84b" : "#f59e0b", background: alreadyOwned ? "rgba(200,168,75,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${alreadyOwned ? "rgba(200,168,75,0.25)" : "rgba(245,158,11,0.3)"}`, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>
+                          {alreadyOwned ? "+ Add" : "🛒 Add"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {!searchAllLoading && searchAllResults.length === 0 && searchAllQuery && (
+                    <div style={{ color: "#555", fontSize: 13, padding: "12px 0" }}>No results. Try a different search.</div>
+                  )}
+                  {!searchAllQuery && (
+                    <div style={{ color: "#555", fontSize: 13, padding: "12px 0", textAlign: "center" }}>Search for any Magic card to add it to your deck — even cards you don't own.</div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : viewMode === "synergies" ? (
@@ -2301,6 +2555,7 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, priceS
     </div>
   );
 }
+
 
 // ─── Deck Combo Finder ──────────────────────────────────────────────────────
 const CSB_BASE = "/api/spellbook";
