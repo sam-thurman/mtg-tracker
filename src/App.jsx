@@ -1888,6 +1888,7 @@ function CollectionRow({ card, onSelect, onRemove, onQty, decks, onToggleDeck, r
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: "bold", fontSize: 14 }}>
               {card.name} {card.isFoil && <span style={{ color: "#a855f7", fontSize: 10, verticalAlign: "middle", marginLeft: 4 }}>✦ foil</span>}
+              {card.set && <span style={{ fontWeight: "normal", fontSize: 11, color: "#555", marginLeft: 6 }}>{card.set.toUpperCase()} #{card.collector_number}</span>}
             </div>
             <div style={{ fontSize: 12, color: "#666" }}>
               {card.type_line}
@@ -2383,7 +2384,10 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, onAddW
                             }}>
                             {isCommander && <span style={{ fontSize: 12, color: "#a855f7", marginRight: 2 }} title="Commander">★</span>}
                             {isWishlist && <span style={{ fontSize: 11, color: "#f59e0b", marginRight: 2 }} title="Wishlist — not in your collection">🛒</span>}
-                            <div style={{ flex: 1, fontSize: 13, color: isWishlist ? "#f3c966" : "var(--text)" }}>{card.name}</div>
+                            <div style={{ flex: 1, fontSize: 13, color: isWishlist ? "#f3c966" : "var(--text)", minWidth: 0 }}>
+                              {card.name}
+                              {!isWishlist && card.set && <span style={{ fontSize: 10, color: "#555", marginLeft: 6 }}>{card.set.toUpperCase()} #{card.collector_number}</span>}
+                            </div>
                             <div style={{ fontSize: 11, color: "#666" }}>{getPriceLabel(card, priceSource, ckPrices)}</div>
                             {isWishlist ? (
                               <>
@@ -2454,7 +2458,10 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, onAddW
                         onMouseMove={e => handleMouseMove(card, e)}
                         onMouseLeave={handleMouseLeave}
                         style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: inDeck ? "rgba(200,168,75,0.08)" : "var(--card-row-bg)", border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "var(--border)"}`, borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left" }}>
-                        <div style={{ flex: 1, fontSize: 13 }}>{card.name}</div>
+                        <div style={{ flex: 1, fontSize: 13, minWidth: 0 }}>
+                          {card.name}
+                          {card.set && <span style={{ fontSize: 10, color: "#555", marginLeft: 6 }}>{card.set.toUpperCase()} #{card.collector_number}</span>}
+                        </div>
                         <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
                         {inDeck && <span style={{ fontSize: 11, color: "#c8a84b" }}>×{inDeck.qty}</span>}
                         <span style={{ fontSize: 13, color: "#c8a84b" }}>+</span>
@@ -2522,9 +2529,10 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, onAddW
                           border: `1px solid ${inDeck ? "rgba(200,168,75,0.3)" : "var(--border)"}`,
                           borderRadius: 6, cursor: "pointer", color: "var(--text)", fontFamily: "inherit", textAlign: "left"
                         }}>
-                        <div style={{ flex: 1, fontSize: 13 }}>
+                        <div style={{ flex: 1, fontSize: 13, minWidth: 0 }}>
                           {card.name}
                           {card.isFoil && <span style={{ marginLeft: 6, fontSize: 10, color: "#a855f7" }}>✦ foil</span>}
+                          {card.set && <span style={{ fontSize: 10, color: "#555", marginLeft: 6 }}>{card.set.toUpperCase()} #{card.collector_number}</span>}
                         </div>
                         <div style={{ fontSize: 11, color: "#666" }}>{card.type_line?.split("—")[0].trim()}</div>
                         {alreadyOwned && <span style={{ fontSize: 10, color: "#4ade80", whiteSpace: "nowrap" }}>✓ owned</span>}
