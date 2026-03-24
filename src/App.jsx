@@ -2153,7 +2153,27 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, onAddW
   const [searchAllFocusIndex, setSearchAllFocusIndex] = useState(-1);
   const searchAllRef = useRef(null);
   const [viewMode, setViewMode] = useState("deck");
+  const [copied, setCopied] = useState(false);
   const { tooltip, handleMouseEnter, handleMouseMove, handleMouseLeave } = useCardTooltip();
+
+  const exportDeckCSV = () => {
+    const rows = ["quantity,card_name", ...deckCards.map(c => `${c.deckQty},"${c.name}"`)].join("\n");
+    const blob = new Blob([rows], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${deck.name.replace(/[^a-z0-9]/gi, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const copyDeckText = () => {
+    const text = deckCards.map(c => `${c.deckQty} ${c.name}`).join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   // Merge owned + wishlist cards into deckCards
   const deckCards = deck.cards.map(c => {
@@ -2286,6 +2306,31 @@ function DeckEditor({ deck, collection, onUpdate, onAdd, onRemove, onQty, onAddW
         </div>
         <div style={{ fontSize: 12, color: "#666" }}>{Object.entries(typeCounts).map(([t, n]) => `${t}(${n})`).join(" · ")}</div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {deckCards.length > 0 && (
+            <>
+              <button
+                onClick={exportDeckCSV}
+                title="Download deck as CSV"
+                style={{
+                  padding: "5px 10px", borderRadius: 6, border: "1px solid rgba(100,180,120,0.35)",
+                  background: "rgba(100,180,120,0.08)", color: "#7ec89e",
+                  cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold",
+                }}
+              >⬇ Export CSV</button>
+              <button
+                onClick={copyDeckText}
+                title="Copy deck list to clipboard"
+                style={{
+                  padding: "5px 10px", borderRadius: 6, border: `1px solid ${copied ? "rgba(100,180,120,0.5)" : "rgba(255,255,255,0.15)"}`,
+                  background: copied ? "rgba(100,180,120,0.12)" : "rgba(255,255,255,0.04)",
+                  color: copied ? "#7ec89e" : "#888",
+                  cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold",
+                  transition: "all 0.2s",
+                }}
+              >{copied ? "✓ Copied!" : "📋 Copy"}</button>
+              <span style={{ width: 1, background: "rgba(255,255,255,0.1)", alignSelf: "stretch", margin: "0 4px" }} />
+            </>
+          )}
           {[{ id: "deck", label: "📋 Deck" }, { id: "combos", label: "⚡ Combos" }, ...(deck.format === "Commander" ? [{ id: "synergies", label: "🧬 Commander Synergies" }] : [])].map(v => (
             <button key={v.id} onClick={() => setViewMode(v.id)} style={{
               padding: "5px 12px", borderRadius: 6, border: "1px solid", cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: "bold",
